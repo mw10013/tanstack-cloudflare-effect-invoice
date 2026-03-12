@@ -1,0 +1,242 @@
+import { useMutation } from "@tanstack/react-query";
+import {
+  createFileRoute,
+  useHydrated,
+  useRouter,
+} from "@tanstack/react-router";
+import { createServerFn, useServerFn } from "@tanstack/react-start";
+import { Cause, Effect } from "effect";
+import * as Schema from "effect/Schema";
+
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Auth } from "@/lib/Auth";
+import { Repository } from "@/lib/Repository";
+import { Request } from "@/lib/Request";
+
+const organizationIdSchema = Schema.Struct({ organizationId: Schema.String });
+
+const acceptInvitationSchema = Schema.Struct({
+  invitationId: Schema.String,
+  organizationId: Schema.String,
+});
+
+const invitationIdSchema = Schema.Struct({ invitationId: Schema.String });
+
+export const Route = createFileRoute("/app/$organizationId/")({
+  loader: ({ params: data }) => getLoaderData({ data }),
+  component: RouteComponent,
+});
+
+const getLoaderData = createServerFn({ method: "GET" })
+  .inputValidator(Schema.toStandardSchemaV1(organizationIdSchema))
+  .handler(async ({ data: { organizationId }, context: { runEffect } }) => {
+    return runEffect(
+      Effect.gen(function* () {
+        const request = yield* Request;
+        const auth = yield* Auth;
+        const session = yield* auth.getSession(request.headers);
+        const validSession = yield* Effect.fromOption(session).pipe(
+          Effect.filterOrFail(
+            (s) => organizationId === s.session.activeOrganizationId,
+            () => new Cause.NoSuchElementError(),
+          ),
+        );
+        const repository = yield* Repository;
+        return yield* repository.getAppDashboardData({
+          userEmail: validSession.user.email,
+          organizationId,
+        });
+      }),
+    );
+  });
+
+const acceptInvitation = createServerFn({ method: "POST" })
+  .inputValidator(Schema.toStandardSchemaV1(acceptInvitationSchema))
+  .handler(
+    ({ data: { invitationId, organizationId }, context: { runEffect } }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const request = yield* Request;
+          const auth = yield* Auth;
+          yield* Effect.tryPromise(() =>
+            auth.api.acceptInvitation({
+              headers: request.headers,
+              body: { invitationId },
+            }),
+          );
+          // better-auth's acceptInvitation sets activeOrganizationId to the
+          // invited org as a side effect — restore it to the current org so
+          // accepting doesn't silently switch the user's context.
+          yield* Effect.tryPromise(() =>
+            auth.api.setActiveOrganization({
+              headers: request.headers,
+              body: { organizationId },
+            }),
+          );
+        }),
+      ),
+  );
+
+const rejectInvitation = createServerFn({ method: "POST" })
+  .inputValidator(Schema.toStandardSchemaV1(invitationIdSchema))
+  .handler(({ data: { invitationId }, context: { runEffect } }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const request = yield* Request;
+        const auth = yield* Auth;
+        yield* Effect.tryPromise(() =>
+          auth.api.rejectInvitation({
+            headers: request.headers,
+            body: { invitationId },
+          }),
+        );
+      }),
+    ),
+  );
+
+function RouteComponent() {
+  const { userInvitations, memberCount, pendingInvitationCount } =
+    Route.useLoaderData();
+
+  return (
+    <div className="flex flex-col gap-6 p-6">
+      {userInvitations.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Invitations</CardTitle>
+            <CardDescription>
+              Invitations awaiting your response.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div>
+              {userInvitations.map((invitation) => (
+                <InvitationItem key={invitation.id} invitation={invitation} />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Members</CardTitle>
+            <CardDescription>
+              Total members in this organization
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold" data-testid="member-count">
+              {memberCount}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pending Invitations</CardTitle>
+            <CardDescription>Invitations awaiting response</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{pendingInvitationCount}</div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function InvitationItem({
+  invitation,
+}: {
+  invitation: (typeof Route)["types"]["loaderData"]["userInvitations"][number];
+}) {
+  const router = useRouter();
+  const isHydrated = useHydrated();
+  const { organizationId } = Route.useParams();
+  const acceptInvitationServerFn = useServerFn(acceptInvitation);
+  const rejectInvitationServerFn = useServerFn(rejectInvitation);
+
+  const acceptInvitationMutation = useMutation({
+    mutationFn: () =>
+      acceptInvitationServerFn({
+        data: { invitationId: invitation.id, organizationId },
+      }),
+    onSuccess: () => {
+      void router.invalidate();
+    },
+  });
+
+  const rejectInvitationMutation = useMutation({
+    mutationFn: () =>
+      rejectInvitationServerFn({
+        data: { invitationId: invitation.id },
+      }),
+    onSuccess: () => {
+      void router.invalidate();
+    },
+  });
+
+  const disabled =
+    !isHydrated ||
+    acceptInvitationMutation.isPending ||
+    rejectInvitationMutation.isPending;
+
+  return (
+    <Item size="sm" className="gap-4 px-0">
+      <ItemContent>
+        <ItemTitle>{invitation.inviter.email}</ItemTitle>
+        <ItemDescription>
+          Role: {invitation.role}
+          <br />
+          Organization: {invitation.organization.name}
+        </ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <Button
+          type="button"
+          name="intent"
+          value="accept"
+          variant="outline"
+          size="sm"
+          disabled={disabled}
+          aria-label={`Accept invitation from ${invitation.inviter.email}`}
+          onClick={() => {
+            acceptInvitationMutation.mutate();
+          }}
+        >
+          Accept
+        </Button>
+        <Button
+          type="button"
+          name="intent"
+          value="reject"
+          variant="destructive"
+          size="sm"
+          disabled={disabled}
+          aria-label={`Reject invitation from ${invitation.inviter.email}`}
+          onClick={() => {
+            rejectInvitationMutation.mutate();
+          }}
+        >
+          Reject
+        </Button>
+      </ItemActions>
+    </Item>
+  );
+}
