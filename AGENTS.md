@@ -7,7 +7,7 @@
 
 ## Project
 
-- `tanstack-cloudflare-effect-saas` is a TanStack Start and Cloudflare Workers application with effect v4, shadcn/ui components (Base UI variant), TypeScript, Tailwind CSS.
+- `tanstack-cloudflare-effect-invoice` is a TanStack Start and Cloudflare Workers application with effect v4, shadcn/ui components (Base UI variant), TypeScript, Tailwind CSS.
 - Route modules are in `src/routes/` and use file route conventions.
 
 ## Port Configuration

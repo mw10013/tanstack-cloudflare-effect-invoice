@@ -294,7 +294,7 @@ function RouteComponent() {
           </svg>
         </div>
         <h1 className="text-2xl leading-tight font-semibold text-wrap lg:text-3xl">
-          Get started with TCES.
+          Get started with TCEI.
         </h1>
         <p className="text-2xl leading-normal font-medium text-wrap text-muted-foreground sm:max-w-[80%] lg:text-3xl">
           Build with{" "}

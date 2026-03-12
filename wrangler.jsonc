@@ -4,7 +4,7 @@
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tces-local",
+  "name": "tcei-local",
   "compatibility_date": "2025-09-17",
   "compatibility_flags": ["nodejs_compat"],
   "account_id": "1422451be59cc2401532ad67d92ae773",
@@ -47,24 +47,24 @@
   },
   "env": {
     "production": {
-      "name": "tces",
+      "name": "tcei",
       "vars": {
         "ENVIRONMENT": "production",
         "DEMO_MODE": "true",
         "TRANSACTIONAL_EMAIL": "noreply@example.com",
-        "BETTER_AUTH_URL": "https://tces.devxo.workers.dev"
+        "BETTER_AUTH_URL": "https://tcei.devxo.workers.dev"
       },
       "d1_databases": [
         {
           "binding": "D1",
-          "database_name": "tces-d1-production",
-          "database_id": "9c5e059c-e9fe-4c7a-9071-d9a0ea2f513c"
+          "database_name": "tcei-d1-production",
+          "database_id": ""
         }
       ],
       "kv_namespaces": [
         {
           "binding": "KV",
-          "id": "acb7585e68ec46c48d4a87fa62eae059"
+          "id": ""
         }
       ],
       "ratelimits": [

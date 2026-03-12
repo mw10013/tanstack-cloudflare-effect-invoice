@@ -68,7 +68,7 @@ function Header() {
               Pricing
             </Link>
             <a
-              href="https://github.com/mw10013/tanstack-cloudflare-effect-saas"
+              href="https://github.com/mw10013/tanstack-cloudflare-effect-invoice"
               target="_blank"
               rel="noopener noreferrer"
               className="font-medium text-muted-foreground data-hovered:text-primary"
@@ -106,7 +106,7 @@ function GitHubRepoLink({ className }: { className?: string }) {
       aria-label="GitHub repo"
       render={
         <a
-          href="https://github.com/mw10013/tanstack-cloudflare-effect-saas"
+          href="https://github.com/mw10013/tanstack-cloudflare-effect-invoice"
           target="_blank"
           rel="noopener noreferrer"
         />
@@ -206,7 +206,7 @@ export function Footer() {
           <ul className="space-y-2 text-sm">
             <li>
               <a
-                href="https://github.com/mw10013/tanstack-cloudflare-effect-saas"
+                href="https://github.com/mw10013/tanstack-cloudflare-effect-invoice"
                 className="text-muted-foreground transition-colors data-hovered:text-foreground"
                 target="_blank"
                 rel="noopener noreferrer"
@@ -219,7 +219,7 @@ export function Footer() {
       </div>
       <div className="flex flex-col items-center justify-between gap-4 border-t border-dashed border-border/40 pt-8 sm:flex-row">
         <p className="text-sm text-muted-foreground">
-          © 2025 TCES. Built with ♥ by{" "}
+          © 2025 TCEI. Built with ♥ by{" "}
           <a
             href="https://github.com/mw10013"
             target="_blank"
