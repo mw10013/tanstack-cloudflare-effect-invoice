@@ -1,6 +1,6 @@
-# Invoice Agent Spike Research
+# Organization Agent Spike Research
 
-Question: how is the `refs/tca` organization agent organized and wired into the worker + Wrangler config, and what is the cleanest way to introduce a similar `invoice agent` spike here without chat capabilities?
+Question: how is the `refs/tca` organization agent organized and wired into the worker + Wrangler config, and what is the cleanest way to introduce a similar `organization agent` spike here without chat capabilities?
 
 ## Short Answer
 
@@ -18,7 +18,7 @@ The main thing we should *not* copy is the chat ancestor.
 export class OrganizationAgent extends AIChatAgent<Env> {
 ```
 
-For the invoice spike, the better fit is a plain `Agent<Env, State>` with a tiny state shape and one or two `@callable()` methods. That keeps the spike aligned with the requirement: no chat, no `useAgentChat`, no chat persistence tables, no chat-specific UI.
+For this repo's organization-agent spike, the better fit is a plain `Agent<Env, State>` with a tiny state shape and one or two `@callable()` methods. That keeps the spike aligned with the requirement: no chat, no `useAgentChat`, no chat persistence tables, no chat-specific UI.
 
 ## What `refs/tca` Is Doing
 
@@ -42,7 +42,7 @@ And the same doc says `AIChatAgent` is just a higher-level layer on top of base 
 Extends `Agent` from the `agents` package. Manages conversation state, persistence, and streaming.
 ```
 
-So for invoice agent, if we do not want chat, we should stop one level lower and extend `Agent` directly.
+So for this repo's `OrganizationAgent`, if we do not want chat, we should stop one level lower and extend `Agent` directly.
 
 ### Agent capabilities used by the org agent
 
@@ -111,9 +111,9 @@ export {
 } from "./organization-agent";
 ```
 
-For the invoice spike, the same pattern should hold:
+For the organization-agent spike, the same pattern should hold:
 
-- export `InvoiceAgent` from `src/worker.ts`
+- export `OrganizationAgent` from `src/worker.ts`
 - add `routeAgentRequest(request, env, ...)` in `fetch`
 - keep TanStack Start as the fallback
 
@@ -157,10 +157,10 @@ It also has workflows:
 
 But those are only needed because the org agent runs workflows.
 
-For invoice spike, the minimal config is smaller:
+For the organization-agent spike, the minimal config is smaller:
 
-- add a durable object binding like `INVOICE_AGENT`
-- add a migration entry for `InvoiceAgent`
+- add a durable object binding like `ORGANIZATION_AGENT`
+- add a migration entry for `OrganizationAgent`
 - do *not* add workflows unless the spike actually tests workflows
 
 ## What The Current App Needs
@@ -200,7 +200,7 @@ So the future spike will need both:
 - a new route file `src/routes/app.$organizationId.agent.tsx`
 - a new sidebar entry in `src/routes/app.$organizationId.tsx`
 
-## Recommended Invoice Agent Shape
+## Recommended Organization Agent Shape
 
 The docs show the plain-agent shape clearly in `refs/cloudflare-docs/src/content/docs/workflows/get-started/durable-agents.mdx:357`:
 
@@ -225,12 +225,12 @@ export class CounterAgent extends Agent<Env, State> {
 For this repo, a good spike shape is:
 
 ```ts
-interface InvoiceAgentState {
+interface OrganizationAgentState {
   readonly message: string;
 }
 
-export class InvoiceAgent extends Agent<Env, InvoiceAgentState> {
-  initialState = { message: "Invoice agent ready" } as const;
+export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
+  initialState = { message: "Organization agent ready" } as const;
 
   @callable()
   getTestMessage() {
@@ -246,6 +246,8 @@ Why this shape:
 - one `@callable()` method is enough to prove routing + binding + client hookup
 - no chat transport or chat persistence is needed
 
+Important nuance: the class name now matches `refs/tca`, but the base class intentionally does not. The reference app uses `AIChatAgent`; this spike should still use plain `Agent` because chat is out of scope.
+
 ## Recommended UI Spike
 
 The route should be a normal TanStack file route under the existing org shell:
@@ -256,8 +258,8 @@ The route should be a normal TanStack file route under the existing org shell:
 Minimal first pass:
 
 - page title like `Agent`
-- short description that this is an invoice-agent spike
-- render a test message from the invoice agent, ideally via `useAgent(...).stub.getTestMessage()`
+- short description that this is an organization-agent spike
+- render a test message from the organization agent, ideally via `useAgent(...).stub.getTestMessage()`
 
 Unlike `refs/tca/src/routes/app.$organizationId.agent.tsx`, we should not use:
 
@@ -294,7 +296,7 @@ TanStack Start pattern also stays simple here:
 
 Smallest useful spike:
 
-1. add `InvoiceAgent extends Agent<Env, InvoiceAgentState>`
+1. add `OrganizationAgent extends Agent<Env, OrganizationAgentState>`
 2. export it from `src/worker.ts`
 3. add `routeAgentRequest(...)` to `src/worker.ts`
 4. add Wrangler durable object binding + migration
@@ -309,14 +311,14 @@ Deliberately out of scope for spike v1:
 - queues
 - R2 integration
 - background scheduling
-- invoice domain behavior beyond one test RPC
+- broader organization-agent behavior beyond one test RPC
 
 ## Open Design Choices To Review In Next Iteration
 
 These are the few choices worth deciding before implementation:
 
-1. naming: `INVOICE_AGENT` vs `INVOICE_AGENTS` binding
-2. instance key: one invoice agent per organization (`organizationId`) vs one global test instance
+1. binding name: `ORGANIZATION_AGENT` to mirror `refs/tca`, or a different local name
+2. instance key: one organization agent per organization (`organizationId`) vs one global test instance
 3. auth gate: whether to protect agent HTTP/WS traffic with the same active-organization check `refs/tca` uses
 4. state vs pure RPC: whether the spike should exercise synced `state` or only a callable method
 
@@ -324,7 +326,7 @@ These are the few choices worth deciding before implementation:
 
 Recommended default for the first implementation pass:
 
-- class: `InvoiceAgent extends Agent<Env, InvoiceAgentState>`
+- class: `OrganizationAgent extends Agent<Env, OrganizationAgentState>`
 - instance name: current `organizationId`
 - transport: `useAgent` + one `@callable()` method
 - auth: yes, mirror the org-bound check from `refs/tca`
