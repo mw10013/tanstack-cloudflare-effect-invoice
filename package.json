@@ -53,8 +53,7 @@
     "refs:ai": "rm -rf refs/ai && mkdir -p refs/ai && curl -L https://github.com/vercel/ai/archive/refs/tags/ai@6.0.49.tar.gz | tar -xz -C refs/ai --strip-components=1",
     "refs:aws4fetch": "rm -rf refs/aws4fetch && mkdir -p refs/aws4fetch && curl -L https://github.com/mhart/aws4fetch/archive/refs/tags/v1.0.20.tar.gz | tar -xz -C refs/aws4fetch --strip-components=1",
     "refs:effect4": "rm -rf refs/effect4 && mkdir -p refs/effect4 && curl -L https://github.com/Effect-TS/effect-smol/archive/refs/tags/effect@4.0.0-beta.27.tar.gz | tar -xz -C refs/effect4 --strip-components=1",
-    "refs:effect3-workshop": "rm -rf refs/effect3-workshop && mkdir -p refs/effect3-workshop && git clone --depth 1 --branch main https://github.com/Effect-TS/effect-days-2025-workshop.git refs/effect3-workshop",
-    "refs:cerr": "rm -rf refs/cerr && mkdir -p refs/cerr && curl -L https://github.com/mw10013/cloudflare-effect-react-router/archive/refs/heads/main.tar.gz | tar -xz -C refs/cerr --strip-components=1",
+    "refs:tca": "rm -rf refs/tca && mkdir -p refs/tca && curl -L https://github.com/mw10013/tanstack-cloudflare-agent/archive/refs/heads/main.tar.gz | tar -xz -C refs/tca --strip-components=1",
     "clone:links": "[ ! -e refs ] && ln -s ../tanstack-cloudflare-agent/refs refs; [ ! -e todo.md ] && ln -s ../tanstack-cloudflare-agent/todo.md todo.md"
   },
   "dependencies": {
