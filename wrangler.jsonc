@@ -19,6 +19,20 @@
   "observability": {
     "enabled": true
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ORGANIZATION_AGENT",
+        "class_name": "OrganizationAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["OrganizationAgent"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "D1",
@@ -75,6 +89,20 @@
             "limit": 5,
             "period": 60
           }
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "ORGANIZATION_AGENT",
+            "class_name": "OrganizationAgent"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["OrganizationAgent"]
         }
       ],
       "triggers": {

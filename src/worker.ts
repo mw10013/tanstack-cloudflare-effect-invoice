@@ -1,5 +1,6 @@
 import { isNotFound, isRedirect } from "@tanstack/react-router";
 import serverEntry from "@tanstack/react-start/server-entry";
+import { routeAgentRequest } from "agents";
 import {
   Cause,
   ConfigProvider,
@@ -10,6 +11,7 @@ import {
   ServiceMap,
 } from "effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { Auth } from "@/lib/Auth";
@@ -20,6 +22,9 @@ import { KV } from "@/lib/KV";
 import { Repository } from "@/lib/Repository";
 import { Request as AppRequest } from "@/lib/Request";
 import { Stripe } from "@/lib/Stripe";
+import { extractAgentInstanceName } from "./organization-agent";
+
+export { OrganizationAgent } from "./organization-agent";
 
 const makeEnvLayer = (env: Env) =>
   Layer.succeedServices(
@@ -171,6 +176,43 @@ export default {
       }
     }
     const runEffect = makeHttpRunEffect(env, request);
+    const routed = await routeAgentRequest(request, env, {
+      onBeforeConnect: async (req) => {
+        const session = await runEffect(
+          Effect.gen(function* () {
+            const auth = yield* Auth;
+            return yield* auth.getSession(req.headers);
+          }),
+        );
+        if (Option.isNone(session)) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+        const agentName = extractAgentInstanceName(req);
+        const activeOrganizationId = session.value.session.activeOrganizationId;
+        if (!activeOrganizationId || agentName !== activeOrganizationId) {
+          return new Response("Forbidden", { status: 403 });
+        }
+      },
+      onBeforeRequest: async (req) => {
+        const session = await runEffect(
+          Effect.gen(function* () {
+            const auth = yield* Auth;
+            return yield* auth.getSession(req.headers);
+          }),
+        );
+        if (Option.isNone(session)) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+        const agentName = extractAgentInstanceName(req);
+        const activeOrganizationId = session.value.session.activeOrganizationId;
+        if (!activeOrganizationId || agentName !== activeOrganizationId) {
+          return new Response("Forbidden", { status: 403 });
+        }
+      },
+    });
+    if (routed) {
+      return routed;
+    }
     return serverEntry.fetch(request, {
       context: {
         env,
