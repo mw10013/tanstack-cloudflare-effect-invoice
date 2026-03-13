@@ -46,6 +46,12 @@
       "id": "kv-local"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "tcei-r2-local"
+    }
+  ],
   "ratelimits": [
     {
       "name": "MAGIC_LINK_RATE_LIMITER",
@@ -89,6 +95,12 @@
             "limit": 5,
             "period": 60
           }
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "R2",
+          "bucket_name": "tcei-r2-production"
         }
       ],
       "durable_objects": {
