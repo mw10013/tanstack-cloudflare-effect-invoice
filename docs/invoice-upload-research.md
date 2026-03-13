@@ -68,6 +68,8 @@ const getInvoices = createServerFn({ method: "GET" })
 
 ### Upload Server Fn
 
+We have R2 service so should not use R2 binding. 
+
 Pattern from refs/tca `uploadFile`:
 ```ts
 const uploadInvoice = createServerFn({ method: "POST" })
@@ -129,6 +131,8 @@ const invoiceFileSchema = Schema.File
     ),
   );
 
+// No name in the upload schema. We do not want the user to have to type a name.
+
 const uploadFormSchema = Schema.Struct({
   name: Schema.Trim.check(Schema.isMinLength(1)).check(Schema.isPattern(/^[A-Za-z0-9_.-]+$/)),
   file: invoiceFileSchema,
@@ -137,8 +141,14 @@ const uploadFormSchema = Schema.Struct({
 
 ### RouteComponent
 
+No name in upload form. we don't want the user to have to type a name.
+
 Two sections:
 1. **Upload form** — TanStack Form with name + file input (`accept="application/pdf,image/png,image/jpeg,image/webp,image/gif"`)
+
+
+We don't have name for now. use id instead.
+
 2. **Invoice list** — table/grid from loader data showing name, createdAt, status
 
 Pattern: `useMutation` wrapping `useServerFn(uploadInvoice)`, submitting FormData.
@@ -191,6 +201,9 @@ Add to `wrangler.jsonc` (top-level and `env.production`):
 ```
 
 ### R2 Event Notification (Production)
+
+I think we want to use `pnpm exec wrangler` instead of `npx wrangler`
+
 
 Created via CLI (not in wrangler.jsonc — R2 event notifications are configured separately):
 
@@ -269,6 +282,8 @@ R2 event notifications don't fire in local dev (`wrangler dev`). The upload serv
 
 ### Invoice Table (SQLite in Agent DO)
 
+No name for now. primary key should string id that is generated.
+
 Add to constructor:
 ```ts
 void this.sql`create table if not exists Invoice (
@@ -285,6 +300,8 @@ void this.sql`create table if not exists Invoice (
 ### onInvoiceUpload Method
 
 Called by queue handler. Inserts/upserts into Invoice table, broadcasts.
+
+No name. I'm not sure how to handle r2ObjectKey. Are we generating that key? I think we need to drill down into the naming convention for invoices. they should probably have an organization id prefix and then maybe a generated id. there is no name because we don't want to force the user to type a name on upload.
 
 ```ts
 @callable()
@@ -394,8 +411,23 @@ For invoices, consider: `{organizationId}/invoices/{name}` to namespace within t
 ## 10. Open Questions
 
 - **R2 key prefix**: `{orgId}/{name}` vs `{orgId}/invoices/{name}`? Latter allows scoped R2 notifications.
+
+the latter. however, `invoices` vs `invoice`? trades-off, recommendation. there is no name, but I guess there's a generated id? I'm not sure. recommendation? I don't want the user to have to type a name.
+
 - **File naming**: User-provided name or auto-generated (UUID/timestamp)? tca uses user-provided names.
+
 - **Max file size**: 10MB? PDFs can be large.
+
+should be fine, i guess. do you see any complications to support? can forms handle 10MB files? can cloudflare? would we need streaming? hopefully not.
+
 - **Invoice status states**: `uploaded` → `processing` → `processed` → `error`?
+
+should be fine for now.
+
 - **Delete support**: Do we need invoice deletion in v1?
+
+hmmm, does tca reference project support delete?
+
 - **Signed URLs**: For viewing PDFs in-browser, need presigned URLs (tca uses aws4fetch for production, API proxy for local).
+
+yes
