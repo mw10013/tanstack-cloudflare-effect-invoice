@@ -170,6 +170,14 @@ const r2QueueMessageSchema = Schema.Struct({
   eventTime: Schema.NonEmptyString,
 });
 
+const r2ObjectCustomMetadataSchema = Schema.Struct({
+  organizationId: Schema.NonEmptyString,
+  invoiceId: Schema.NonEmptyString,
+  idempotencyKey: Schema.NonEmptyString,
+  fileName: Schema.optionalKey(Schema.NonEmptyString),
+  contentType: Schema.optionalKey(Schema.NonEmptyString),
+});
+
 const parseInvoiceObjectKey = (key: string) => {
   const [organizationId, collection, invoiceId] = key.split("/");
   if (!organizationId || collection !== "invoices" || !invoiceId) return;
@@ -236,24 +244,25 @@ const handleInvoiceUpload = async ({
     message.ack();
     return;
   }
-  const { customMetadata } = head;
+  const metadataResult = Schema.decodeUnknownExit(r2ObjectCustomMetadataSchema)(
+    head.customMetadata ?? {},
+  );
+  if (Exit.isFailure(metadataResult)) {
+    console.error("Invalid customMetadata on R2 object:", {
+      key: notification.object.key,
+      cause: String(metadataResult.cause),
+      customMetadata: head.customMetadata,
+    });
+    message.ack();
+    return;
+  }
   const {
     organizationId,
     invoiceId,
     idempotencyKey,
     fileName,
     contentType,
-  } = customMetadata ?? {};
-  if (!organizationId || !invoiceId || !idempotencyKey) {
-    console.error("Missing customMetadata on R2 object:", {
-      key: notification.object.key,
-      organizationId,
-      invoiceId,
-      idempotencyKey,
-    });
-    message.ack();
-    return;
-  }
+  } = metadataResult.value;
   const id = env.ORGANIZATION_AGENT.idFromName(organizationId);
   const stub = env.ORGANIZATION_AGENT.get(id);
   try {
