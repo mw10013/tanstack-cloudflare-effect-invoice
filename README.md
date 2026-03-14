@@ -138,7 +138,7 @@ pnpm test:e2e
 - pnpm d1:reset:PRODUCTION
 - pnpm deploy:PRODUCTION
 - pnpm exec wrangler secret put SECRET --env production
-  - BETTER_AUTH_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, ANALYTICS_TOKEN
+  - BETTER_AUTH_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, ANALYTICS_TOKEN, CF_ACCOUNT_ID, R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY
 - Workers & Pages Settings: tcei
   - Git repository: connect to git repo
   - Build configuration

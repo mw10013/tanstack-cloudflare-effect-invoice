@@ -14,7 +14,11 @@
     "DEMO_MODE": "true",
     "TRANSACTIONAL_EMAIL": "noreply@example.com",
     "BETTER_AUTH_URL": "http://localhost:3000",
-    "ANALYTICS_TOKEN": ""
+    "ANALYTICS_TOKEN": "",
+    "CF_ACCOUNT_ID": "1422451be59cc2401532ad67d92ae773",
+    "R2_BUCKET_NAME": "tcei-r2-local",
+    "R2_S3_ACCESS_KEY_ID": "",
+    "R2_S3_SECRET_ACCESS_KEY": ""
   },
   "observability": {
     "enabled": true
@@ -89,7 +93,11 @@
         "ENVIRONMENT": "production",
         "DEMO_MODE": "true",
         "TRANSACTIONAL_EMAIL": "noreply@example.com",
-        "BETTER_AUTH_URL": "https://tcei.devxo.workers.dev"
+        "BETTER_AUTH_URL": "https://tcei.devxo.workers.dev",
+        "CF_ACCOUNT_ID": "1422451be59cc2401532ad67d92ae773",
+        "R2_BUCKET_NAME": "tcei-r2-production",
+        "R2_S3_ACCESS_KEY_ID": "",
+        "R2_S3_SECRET_ACCESS_KEY": ""
       },
       "d1_databases": [
         {
