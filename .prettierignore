@@ -1,9 +1,0 @@
-# Lock files
-pnpm-lock.yaml
-
-# UI components
-src/components/ui/*.tsx
-
-# Generated files
-src/routeTree.gen.ts
-worker-configuration.d.ts

@@ -1,6 +1,11 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "printWidth": 80,
+  "ignorePatterns": [
+    "src/components/ui/*.tsx",
+    "src/routeTree.gen.ts",
+    "worker-configuration.d.ts"
+  ],
   "sortImports": {
     "groups": [
       "type-builtin",
