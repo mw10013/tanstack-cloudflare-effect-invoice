@@ -131,17 +131,17 @@
       "queues": {
         "producers": [
           {
-            "queue": "r2-invoice-notifications",
-            "binding": "R2_UPLOAD_QUEUE"
+            "queue": "invoice-ingest",
+            "binding": "INVOICE_INGEST_Q"
           }
         ],
         "consumers": [
           {
-            "queue": "r2-invoice-notifications",
+            "queue": "invoice-ingest",
             "max_batch_size": 10,
             "max_batch_timeout": 5,
             "max_retries": 3,
-            "dead_letter_queue": "r2-invoice-notifications-dlq"
+            "dead_letter_queue": "invoice-ingest-dlq"
           }
         ]
       },

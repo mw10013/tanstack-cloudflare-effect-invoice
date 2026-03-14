@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
 import { useAgent } from "agents/react";
-import { Cause, Config, Effect } from "effect";
+import { Cause, Config, Effect, Redacted } from "effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { AlertCircle, FileText, Trash2, Upload } from "lucide-react";
@@ -85,10 +85,43 @@ const getInvoices = createServerFn({ method: "GET" })
             () => new Cause.NoSuchElementError(),
           ),
         );
+        const environment = yield* Config.nonEmptyString("ENVIRONMENT");
         const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
         const id = ORGANIZATION_AGENT.idFromName(organizationId);
         const stub = ORGANIZATION_AGENT.get(id);
-        return yield* Effect.tryPromise(() => stub.getInvoices());
+        const invoices = yield* Effect.tryPromise(() => stub.getInvoices());
+        if (environment === "local") {
+          return invoices.map((invoice) => ({
+            ...invoice,
+            viewUrl: `/api/org/${organizationId}/invoice/${encodeURIComponent(invoice.id)}`,
+          }));
+        }
+        const r2BucketName = yield* Config.nonEmptyString("R2_BUCKET_NAME");
+        const r2S3AccessKeyId = yield* Config.redacted("R2_S3_ACCESS_KEY_ID");
+        const r2S3SecretAccessKey =
+          yield* Config.redacted("R2_S3_SECRET_ACCESS_KEY");
+        const cfAccountId = yield* Config.nonEmptyString("CF_ACCOUNT_ID");
+        return yield* Effect.tryPromise(async () => {
+          const { AwsClient } = await import("aws4fetch");
+          const client = new AwsClient({
+            service: "s3",
+            region: "auto",
+            accessKeyId: Redacted.value(r2S3AccessKeyId),
+            secretAccessKey: Redacted.value(r2S3SecretAccessKey),
+          });
+          return Promise.all(
+            invoices.map(async (invoice) => {
+              const signed = await client.sign(
+                new Request(
+                  `https://${cfAccountId}.r2.cloudflarestorage.com/${r2BucketName}/${invoice.r2ObjectKey}?X-Amz-Expires=900`,
+                  { method: "GET" },
+                ),
+                { aws: { signQuery: true } },
+              );
+              return { ...invoice, viewUrl: signed.url };
+            }),
+          );
+        });
       }),
     ),
   );
@@ -299,7 +332,14 @@ function RouteComponent() {
                   <TableRow key={invoice.id}>
                     <TableCell className="flex items-center gap-2 font-medium">
                       <FileText className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{invoice.fileName}</span>
+                      <a
+                        href={invoice.viewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate hover:underline"
+                      >
+                        {invoice.fileName}
+                      </a>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {invoice.contentType.split("/")[1]?.toUpperCase() ??

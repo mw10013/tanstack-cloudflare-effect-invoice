@@ -146,15 +146,13 @@ Presigned GET URLs work directly as `src` attributes:
 - Presigned URLs only work with <ACCOUNT_ID>.r2.cloudflarestorage.com.
 ```
 
-## Proposal for invoices (no code changes yet)
-
-### Option A: loader adds `viewUrl` per invoice (closest to refs/tca)
+## Plan for invoices
 
 1. Extend the invoices loader (`getInvoices`) to map each invoice row to include a `viewUrl`.
 2. Use local proxy URL for `ENVIRONMENT === "local"` and presigned URL for production.
 3. Render file name as `<a href={viewUrl} target="_blank" rel="noreferrer">`.
 
-Key values from refs/tca that carry over:
+Signing details carried over from refs/tca:
 
 - `AwsClient` config: `service: "s3"`, `region: "auto"`.
 - URL base: `https://${CF_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}`.
@@ -164,23 +162,6 @@ Key values from refs/tca that carry over:
 Invoice-specific detail:
 
 - Use `invoice.r2ObjectKey` directly in the URL path (already stored in DB via `OrganizationAgent`).
-
-Tradeoffs:
-
-- Signed URLs are time-limited; a user leaving the list open might get expired links without a refresh.
-
-### Option B: on-demand sign + open in new tab
-
-1. Add a server fn to sign a single invoice key on click.
-2. On click, call the server fn, then `window.open(signedUrl, "_blank")`.
-
-Tradeoffs:
-
-- Always fresh URL, but one extra request per click.
-
-### Recommendation
-
-Option A is simpler and closer to refs/tca: reuse loader mapping + signed URL generation once per refresh, no extra server fn or client click handler. It also keeps URL construction co-located with invoice data in the loader, matching the existing pattern for uploads.
 
 ### Local proxy route (if we keep parity with refs/tca)
 
@@ -224,7 +205,22 @@ Bucket binding names match those values:
 "r2_buckets": [{ "binding": "R2", "bucket_name": "tcei-r2-production" }]
 ```
 
-Queue binding mismatch (non-blocking for signed URLs, but relevant to invoice ingest):
+Queue binding is now aligned in production:
 
-- Top-level queue binding is `INVOICE_INGEST_Q` for `invoice-ingest`.
-- `env.production.queues` uses `R2_UPLOAD_QUEUE` bound to `r2-invoice-notifications`.
+```jsonc
+// wrangler.jsonc (env.production.queues)
+"queues": {
+  "producers": [
+    { "queue": "invoice-ingest", "binding": "INVOICE_INGEST_Q" }
+  ],
+  "consumers": [
+    {
+      "queue": "invoice-ingest",
+      "max_batch_size": 10,
+      "max_batch_timeout": 5,
+      "max_retries": 3,
+      "dead_letter_queue": "invoice-ingest-dlq"
+    }
+  ]
+}
+```

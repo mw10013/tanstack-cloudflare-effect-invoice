@@ -30,6 +30,7 @@ import { Route as AppOrganizationIdInvitationsRouteImport } from './routes/app.$
 import { Route as AppOrganizationIdBillingRouteImport } from './routes/app.$organizationId.billing'
 import { Route as AppOrganizationIdAgentRouteImport } from './routes/app.$organizationId.agent'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiOrgOrganizationIdInvoiceInvoiceIdRouteImport } from './routes/api/org.$organizationId.invoice.$invoiceId'
 import { Route as ApiE2eDeleteUserEmailRouteImport } from './routes/api/e2e/delete/user/$email'
 
 const MagicLinkRoute = MagicLinkRouteImport.update({
@@ -140,6 +141,12 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiOrgOrganizationIdInvoiceInvoiceIdRoute =
+  ApiOrgOrganizationIdInvoiceInvoiceIdRouteImport.update({
+    id: '/api/org/$organizationId/invoice/$invoiceId',
+    path: '/api/org/$organizationId/invoice/$invoiceId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiE2eDeleteUserEmailRoute = ApiE2eDeleteUserEmailRouteImport.update({
   id: '/api/e2e/delete/user/$email',
   path: '/api/e2e/delete/user/$email',
@@ -168,6 +175,7 @@ export interface FileRoutesByFullPath {
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId/': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
+  '/api/org/$organizationId/invoice/$invoiceId': typeof ApiOrgOrganizationIdInvoiceInvoiceIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -188,6 +196,7 @@ export interface FileRoutesByTo {
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
+  '/api/org/$organizationId/invoice/$invoiceId': typeof ApiOrgOrganizationIdInvoiceInvoiceIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -213,6 +222,7 @@ export interface FileRoutesById {
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId/': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
+  '/api/org/$organizationId/invoice/$invoiceId': typeof ApiOrgOrganizationIdInvoiceInvoiceIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -238,6 +248,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/members'
     | '/app/$organizationId/'
     | '/api/e2e/delete/user/$email'
+    | '/api/org/$organizationId/invoice/$invoiceId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -258,6 +269,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/members'
     | '/app/$organizationId'
     | '/api/e2e/delete/user/$email'
+    | '/api/org/$organizationId/invoice/$invoiceId'
   id:
     | '__root__'
     | '/_mkt'
@@ -282,6 +294,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/members'
     | '/app/$organizationId/'
     | '/api/e2e/delete/user/$email'
+    | '/api/org/$organizationId/invoice/$invoiceId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -292,6 +305,7 @@ export interface RootRouteChildren {
   MagicLinkRoute: typeof MagicLinkRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiE2eDeleteUserEmailRoute: typeof ApiE2eDeleteUserEmailRoute
+  ApiOrgOrganizationIdInvoiceInvoiceIdRoute: typeof ApiOrgOrganizationIdInvoiceInvoiceIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -443,6 +457,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/org/$organizationId/invoice/$invoiceId': {
+      id: '/api/org/$organizationId/invoice/$invoiceId'
+      path: '/api/org/$organizationId/invoice/$invoiceId'
+      fullPath: '/api/org/$organizationId/invoice/$invoiceId'
+      preLoaderRoute: typeof ApiOrgOrganizationIdInvoiceInvoiceIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/e2e/delete/user/$email': {
       id: '/api/e2e/delete/user/$email'
       path: '/api/e2e/delete/user/$email'
@@ -524,6 +545,8 @@ const rootRouteChildren: RootRouteChildren = {
   MagicLinkRoute: MagicLinkRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiE2eDeleteUserEmailRoute: ApiE2eDeleteUserEmailRoute,
+  ApiOrgOrganizationIdInvoiceInvoiceIdRoute:
+    ApiOrgOrganizationIdInvoiceInvoiceIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
