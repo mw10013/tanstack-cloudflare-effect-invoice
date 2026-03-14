@@ -70,7 +70,7 @@ const getInvoices = createServerFn({ method: "GET" })
 
 ### Upload Server Fn
 
-Uses the `R2` Effect service (not raw R2 binding). The R2 service is already available via `makeHttpRunEffect` layer stack (`kvLayer` provides env → `CloudflareEnv` → `R2`). However, the upload server fn also needs `R2_UPLOAD_QUEUE` from `CloudflareEnv` for local queue simulation.
+Uses the `R2` Effect service (not raw R2 binding). The R2 service is already available via `makeHttpRunEffect` layer stack (`kvLayer` provides env → `CloudflareEnv` → `R2`). However, the upload server fn also needs `INVOICE_INGEST_Q` from `CloudflareEnv` for local queue simulation.
 
 **No name field** — server generates `invoiceId` via `crypto.randomUUID()`.
 
@@ -85,7 +85,7 @@ const uploadInvoice = createServerFn({ method: "POST" })
       Effect.gen(function* () {
         // auth: get organizationId from session/context
         const environment = yield* Config.nonEmptyString("ENVIRONMENT");
-        const { R2_UPLOAD_QUEUE } = yield* CloudflareEnv;
+        const { INVOICE_INGEST_Q } = yield* CloudflareEnv;
         const r2 = yield* R2;
         const invoiceId = crypto.randomUUID();
         const key = `${organizationId}/invoices/${invoiceId}`;
@@ -96,7 +96,7 @@ const uploadInvoice = createServerFn({ method: "POST" })
         });
         if (environment === "local") {
           yield* Effect.tryPromise(() =>
-            R2_UPLOAD_QUEUE.send({
+            INVOICE_INGEST_Q.send({
               account: "local",
               action: "PutObject",
               bucket: "tcei-r2-local",
@@ -180,17 +180,17 @@ Add to `wrangler.jsonc` (top-level and `env.production`):
 "queues": {
   "producers": [
     {
-      "queue": "r2-invoice-notifications",
-      "binding": "R2_UPLOAD_QUEUE"
+      "queue": "invoice-ingest",
+      "binding": "INVOICE_INGEST_Q"
     }
   ],
   "consumers": [
     {
-      "queue": "r2-invoice-notifications",
+      "queue": "invoice-ingest",
       "max_batch_size": 10,
       "max_batch_timeout": 5,
       "max_retries": 3,
-      "dead_letter_queue": "r2-invoice-notifications-dlq"
+      "dead_letter_queue": "invoice-ingest-dlq"
     }
   ]
 }
@@ -203,7 +203,7 @@ Created via CLI (not in wrangler.jsonc — R2 event notifications are configured
 ```bash
 pnpm exec wrangler r2 bucket notification create tcei-r2-production \
   --event-type object-create \
-  --queue r2-invoice-notifications \
+  --queue invoice-ingest \
   --prefix "invoices/"
 ```
 
@@ -276,7 +276,7 @@ async queue(batch, env) {
 
 ### Local Workaround
 
-R2 event notifications don't fire in local dev (`wrangler dev`). The upload server fn manually sends to `R2_UPLOAD_QUEUE` when `ENVIRONMENT === "local"` — same pattern as refs/tca.
+R2 event notifications don't fire in local dev (`wrangler dev`). The upload server fn manually sends to `INVOICE_INGEST_Q` when `ENVIRONMENT === "local"` — same pattern as refs/tca.
 
 ---
 
@@ -347,7 +347,7 @@ getInvoices() {
 
 ## 5. CloudflareEnv / Env Type
 
-`R2_UPLOAD_QUEUE` must be in the `Env` interface. After adding the queue binding to `wrangler.jsonc`, run `pnpm typecheck` (which generates wrangler types) to get `R2_UPLOAD_QUEUE: Queue` in `Env`.
+`INVOICE_INGEST_Q` must be in the `Env` interface. After adding the queue binding to `wrangler.jsonc`, run `pnpm typecheck` (which generates wrangler types) to get `INVOICE_INGEST_Q: Queue` in `Env`.
 
 Current `CloudflareEnv` is `ServiceMap.Service<Env>("CloudflareEnv")` — no changes needed, it passes through the full `Env`.
 
@@ -426,7 +426,7 @@ Implement local API proxy first; production presigned URLs can follow.
 ## 11. Implementation Steps
 
 1. **wrangler.jsonc** — add `queues` config (producers + consumers)
-2. **`pnpm typecheck`** — regenerate `Env` types with `R2_UPLOAD_QUEUE`
+2. **`pnpm typecheck`** — regenerate `Env` types with `INVOICE_INGEST_Q`
 3. **`src/organization-agent.ts`** — add Invoice table, `onInvoiceUpload`, `getInvoices`
 4. **`src/worker.ts`** — add `queue` handler
 5. **`src/routes/app.$organizationId.invoices.tsx`** — route with file-only upload form + invoice list

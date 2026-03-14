@@ -19,6 +19,7 @@ import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { D1 } from "@/lib/D1";
 import * as Domain from "@/lib/Domain";
 import { KV } from "@/lib/KV";
+import { R2 } from "@/lib/R2";
 import { Repository } from "@/lib/Repository";
 import { Request as AppRequest } from "@/lib/Request";
 import { Stripe } from "@/lib/Stripe";
@@ -104,12 +105,14 @@ const makeHttpRunEffect = (env: Env, request: Request) => {
     Stripe.layer,
     Layer.merge(repositoryLayer, d1KvLayer),
   );
+  const r2Layer = Layer.provideMerge(R2.layer, envLayer);
   const authLayer = Layer.provideMerge(Auth.layer, stripeLayer);
   const requestLayer = Layer.succeedServices(
     ServiceMap.make(AppRequest, request),
   );
   const authRequestLayer = Layer.merge(authLayer, requestLayer);
-  const runtimeLayer = Layer.merge(authRequestLayer, makeLoggerLayer(env));
+  const authRequestR2Layer = Layer.merge(authRequestLayer, r2Layer);
+  const runtimeLayer = Layer.merge(authRequestR2Layer, makeLoggerLayer(env));
   return async <A, E>(
     effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
   ): Promise<A> => {
@@ -160,6 +163,12 @@ declare module "@tanstack/react-start" {
     server: { requestContext: ServerContext };
   }
 }
+
+const r2QueueMessageSchema = Schema.Struct({
+  action: Schema.NonEmptyString,
+  object: Schema.Struct({ key: Schema.NonEmptyString }),
+  eventTime: Schema.NonEmptyString,
+});
 
 export default {
   async fetch(request, env, _ctx) {
@@ -241,6 +250,78 @@ export default {
           }),
         );
         break;
+      }
+    }
+  },
+
+  async queue(batch, env) {
+    for (const message of batch.messages) {
+      const result = Schema.decodeUnknownExit(r2QueueMessageSchema)(
+        message.body,
+      );
+      if (Exit.isFailure(result)) {
+        console.error("Invalid R2 queue message body", {
+          messageId: message.id,
+          cause: String(result.cause),
+          body: message.body,
+        });
+        message.ack();
+        continue;
+      }
+      const notification = result.value;
+      if (notification.action !== "PutObject") {
+        message.ack();
+        continue;
+      }
+      const head = await env.R2.head(notification.object.key);
+      if (!head) {
+        console.warn(
+          "R2 object deleted before notification processed:",
+          notification.object.key,
+        );
+        message.ack();
+        continue;
+      }
+      const organizationId = head.customMetadata?.organizationId;
+      const invoiceId = head.customMetadata?.invoiceId;
+      const idempotencyKey = head.customMetadata?.idempotencyKey;
+      const fileName = head.customMetadata?.fileName;
+      const contentType = head.customMetadata?.contentType;
+      if (!organizationId || !invoiceId || !idempotencyKey) {
+        console.error("Missing customMetadata on R2 object:", {
+          key: notification.object.key,
+          organizationId,
+          invoiceId,
+          idempotencyKey,
+        });
+        message.ack();
+        continue;
+      }
+      const id = env.ORGANIZATION_AGENT.idFromName(organizationId);
+      const stub = env.ORGANIZATION_AGENT.get(id);
+      try {
+        await stub.onInvoiceUpload({
+          invoiceId,
+          eventTime: notification.eventTime,
+          idempotencyKey,
+          r2ObjectKey: notification.object.key,
+          fileName: fileName ?? "unknown",
+          contentType: contentType ?? "application/octet-stream",
+        });
+        message.ack();
+      } catch (error) {
+        const msg =
+          error instanceof Error
+            ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
+            : String(error);
+        console.error("queue onInvoiceUpload failed", {
+          key: notification.object.key,
+          organizationId,
+          invoiceId,
+          idempotencyKey,
+          error: msg,
+        });
+        message.retry();
       }
     }
   },

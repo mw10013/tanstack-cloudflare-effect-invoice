@@ -25,6 +25,7 @@ import { Route as AdminCustomersRouteImport } from './routes/admin.customers'
 import { Route as MktPricingRouteImport } from './routes/_mkt.pricing'
 import { Route as AppOrganizationIdIndexRouteImport } from './routes/app.$organizationId.index'
 import { Route as AppOrganizationIdMembersRouteImport } from './routes/app.$organizationId.members'
+import { Route as AppOrganizationIdInvoicesRouteImport } from './routes/app.$organizationId.invoices'
 import { Route as AppOrganizationIdInvitationsRouteImport } from './routes/app.$organizationId.invitations'
 import { Route as AppOrganizationIdBillingRouteImport } from './routes/app.$organizationId.billing'
 import { Route as AppOrganizationIdAgentRouteImport } from './routes/app.$organizationId.agent'
@@ -111,6 +112,12 @@ const AppOrganizationIdMembersRoute =
     path: '/members',
     getParentRoute: () => AppOrganizationIdRoute,
   } as any)
+const AppOrganizationIdInvoicesRoute =
+  AppOrganizationIdInvoicesRouteImport.update({
+    id: '/invoices',
+    path: '/invoices',
+    getParentRoute: () => AppOrganizationIdRoute,
+  } as any)
 const AppOrganizationIdInvitationsRoute =
   AppOrganizationIdInvitationsRouteImport.update({
     id: '/invitations',
@@ -157,6 +164,7 @@ export interface FileRoutesByFullPath {
   '/app/$organizationId/agent': typeof AppOrganizationIdAgentRoute
   '/app/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/app/$organizationId/invitations': typeof AppOrganizationIdInvitationsRoute
+  '/app/$organizationId/invoices': typeof AppOrganizationIdInvoicesRoute
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId/': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
@@ -176,6 +184,7 @@ export interface FileRoutesByTo {
   '/app/$organizationId/agent': typeof AppOrganizationIdAgentRoute
   '/app/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/app/$organizationId/invitations': typeof AppOrganizationIdInvitationsRoute
+  '/app/$organizationId/invoices': typeof AppOrganizationIdInvoicesRoute
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
@@ -200,6 +209,7 @@ export interface FileRoutesById {
   '/app/$organizationId/agent': typeof AppOrganizationIdAgentRoute
   '/app/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/app/$organizationId/invitations': typeof AppOrganizationIdInvitationsRoute
+  '/app/$organizationId/invoices': typeof AppOrganizationIdInvoicesRoute
   '/app/$organizationId/members': typeof AppOrganizationIdMembersRoute
   '/app/$organizationId/': typeof AppOrganizationIdIndexRoute
   '/api/e2e/delete/user/$email': typeof ApiE2eDeleteUserEmailRoute
@@ -224,6 +234,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/agent'
     | '/app/$organizationId/billing'
     | '/app/$organizationId/invitations'
+    | '/app/$organizationId/invoices'
     | '/app/$organizationId/members'
     | '/app/$organizationId/'
     | '/api/e2e/delete/user/$email'
@@ -243,6 +254,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/agent'
     | '/app/$organizationId/billing'
     | '/app/$organizationId/invitations'
+    | '/app/$organizationId/invoices'
     | '/app/$organizationId/members'
     | '/app/$organizationId'
     | '/api/e2e/delete/user/$email'
@@ -266,6 +278,7 @@ export interface FileRouteTypes {
     | '/app/$organizationId/agent'
     | '/app/$organizationId/billing'
     | '/app/$organizationId/invitations'
+    | '/app/$organizationId/invoices'
     | '/app/$organizationId/members'
     | '/app/$organizationId/'
     | '/api/e2e/delete/user/$email'
@@ -395,6 +408,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdMembersRouteImport
       parentRoute: typeof AppOrganizationIdRoute
     }
+    '/app/$organizationId/invoices': {
+      id: '/app/$organizationId/invoices'
+      path: '/invoices'
+      fullPath: '/app/$organizationId/invoices'
+      preLoaderRoute: typeof AppOrganizationIdInvoicesRouteImport
+      parentRoute: typeof AppOrganizationIdRoute
+    }
     '/app/$organizationId/invitations': {
       id: '/app/$organizationId/invitations'
       path: '/invitations'
@@ -467,6 +487,7 @@ interface AppOrganizationIdRouteChildren {
   AppOrganizationIdAgentRoute: typeof AppOrganizationIdAgentRoute
   AppOrganizationIdBillingRoute: typeof AppOrganizationIdBillingRoute
   AppOrganizationIdInvitationsRoute: typeof AppOrganizationIdInvitationsRoute
+  AppOrganizationIdInvoicesRoute: typeof AppOrganizationIdInvoicesRoute
   AppOrganizationIdMembersRoute: typeof AppOrganizationIdMembersRoute
   AppOrganizationIdIndexRoute: typeof AppOrganizationIdIndexRoute
 }
@@ -475,6 +496,7 @@ const AppOrganizationIdRouteChildren: AppOrganizationIdRouteChildren = {
   AppOrganizationIdAgentRoute: AppOrganizationIdAgentRoute,
   AppOrganizationIdBillingRoute: AppOrganizationIdBillingRoute,
   AppOrganizationIdInvitationsRoute: AppOrganizationIdInvitationsRoute,
+  AppOrganizationIdInvoicesRoute: AppOrganizationIdInvoicesRoute,
   AppOrganizationIdMembersRoute: AppOrganizationIdMembersRoute,
   AppOrganizationIdIndexRoute: AppOrganizationIdIndexRoute,
 }
