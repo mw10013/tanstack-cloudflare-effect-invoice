@@ -178,6 +178,8 @@ Tradeoffs:
 
 - Always fresh URL, but one extra request per click.
 
+I'm undecided. what's your recommendation and why? which one is simpler implementation?
+
 ### Local proxy route (if we keep parity with refs/tca)
 
 Follow the `refs/tca` route pattern to stream from R2 in local dev only; the URL shape could mirror invoices, e.g. `/api/org/$organizationId/invoice/$invoiceId` or `/api/org/$organizationId/invoice/$r2ObjectKey`.
@@ -186,3 +188,5 @@ Follow the `refs/tca` route pattern to stream from R2 in local dev only; the URL
 
 - Ensure `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, `CF_ACCOUNT_ID`, `R2_BUCKET_NAME` are available in env and config in this repo; refs/tca depends on these for signing.
 - For top-level navigation (`target="_blank"`), CORS is less critical than for XHR, but keep the R2 CORS config aligned with presigned URL usage if images are also embedded.
+
+Go check our wrangler to see if we have all we need there. It may have bucket names that are incorrect.
