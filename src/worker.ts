@@ -170,6 +170,114 @@ const r2QueueMessageSchema = Schema.Struct({
   eventTime: Schema.NonEmptyString,
 });
 
+const parseInvoiceObjectKey = (key: string) => {
+  const [organizationId, collection, invoiceId] = key.split("/");
+  if (!organizationId || collection !== "invoices" || !invoiceId) return;
+  return { organizationId, invoiceId };
+};
+
+const formatQueueError = (error: unknown) =>
+  error instanceof Error
+    ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
+    : String(error);
+
+const handleInvoiceDelete = async ({
+  env,
+  message,
+  notification,
+}: {
+  env: Env;
+  message: MessageBatch["messages"][number];
+  notification: typeof r2QueueMessageSchema.Type;
+}) => {
+  const parsed = parseInvoiceObjectKey(notification.object.key);
+  if (!parsed) {
+    console.error("Invalid invoice delete object key:", {
+      key: notification.object.key,
+    });
+    message.ack();
+    return;
+  }
+  const id = env.ORGANIZATION_AGENT.idFromName(parsed.organizationId);
+  const stub = env.ORGANIZATION_AGENT.get(id);
+  try {
+    await stub.onInvoiceDelete({
+      invoiceId: parsed.invoiceId,
+      eventTime: notification.eventTime,
+      r2ObjectKey: notification.object.key,
+    });
+    message.ack();
+  } catch (error) {
+    console.error("queue onInvoiceDelete failed", {
+      key: notification.object.key,
+      organizationId: parsed.organizationId,
+      invoiceId: parsed.invoiceId,
+      error: formatQueueError(error),
+    });
+    message.retry();
+  }
+};
+
+const handleInvoiceUpload = async ({
+  env,
+  message,
+  notification,
+}: {
+  env: Env;
+  message: MessageBatch["messages"][number];
+  notification: typeof r2QueueMessageSchema.Type;
+}) => {
+  const head = await env.R2.head(notification.object.key);
+  if (!head) {
+    console.warn(
+      "R2 object deleted before notification processed:",
+      notification.object.key,
+    );
+    message.ack();
+    return;
+  }
+  const { customMetadata } = head;
+  const {
+    organizationId,
+    invoiceId,
+    idempotencyKey,
+    fileName,
+    contentType,
+  } = customMetadata ?? {};
+  if (!organizationId || !invoiceId || !idempotencyKey) {
+    console.error("Missing customMetadata on R2 object:", {
+      key: notification.object.key,
+      organizationId,
+      invoiceId,
+      idempotencyKey,
+    });
+    message.ack();
+    return;
+  }
+  const id = env.ORGANIZATION_AGENT.idFromName(organizationId);
+  const stub = env.ORGANIZATION_AGENT.get(id);
+  try {
+    await stub.onInvoiceUpload({
+      invoiceId,
+      eventTime: notification.eventTime,
+      idempotencyKey,
+      r2ObjectKey: notification.object.key,
+      fileName: fileName ?? "unknown",
+      contentType: contentType ?? "application/octet-stream",
+    });
+    message.ack();
+  } catch (error) {
+    console.error("queue onInvoiceUpload failed", {
+      key: notification.object.key,
+      organizationId,
+      invoiceId,
+      idempotencyKey,
+      error: formatQueueError(error),
+    });
+    message.retry();
+  }
+};
+
 export default {
   async fetch(request, env, _ctx) {
     const url = new URL(request.url);
@@ -266,62 +374,18 @@ export default {
           body: message.body,
         });
         message.ack();
-        continue;
-      }
-      const notification = result.value;
-      if (notification.action !== "PutObject") {
-        message.ack();
-        continue;
-      }
-      const head = await env.R2.head(notification.object.key);
-      if (!head) {
-        console.warn(
-          "R2 object deleted before notification processed:",
-          notification.object.key,
-        );
-        message.ack();
-        continue;
-      }
-      const organizationId = head.customMetadata?.organizationId;
-      const invoiceId = head.customMetadata?.invoiceId;
-      const idempotencyKey = head.customMetadata?.idempotencyKey;
-      const fileName = head.customMetadata?.fileName;
-      const contentType = head.customMetadata?.contentType;
-      if (!organizationId || !invoiceId || !idempotencyKey) {
-        console.error("Missing customMetadata on R2 object:", {
-          key: notification.object.key,
-          organizationId,
-          invoiceId,
-          idempotencyKey,
-        });
-        message.ack();
-        continue;
-      }
-      const id = env.ORGANIZATION_AGENT.idFromName(organizationId);
-      const stub = env.ORGANIZATION_AGENT.get(id);
-      try {
-        await stub.onInvoiceUpload({
-          invoiceId,
-          eventTime: notification.eventTime,
-          idempotencyKey,
-          r2ObjectKey: notification.object.key,
-          fileName: fileName ?? "unknown",
-          contentType: contentType ?? "application/octet-stream",
-        });
-        message.ack();
-      } catch (error) {
-        const msg =
-          error instanceof Error
-            ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
-            : String(error);
-        console.error("queue onInvoiceUpload failed", {
-          key: notification.object.key,
-          organizationId,
-          invoiceId,
-          idempotencyKey,
-          error: msg,
-        });
-        message.retry();
+      } else {
+        const notification = result.value;
+        if (
+          notification.action !== "PutObject" &&
+          notification.action !== "DeleteObject"
+        ) {
+          message.ack();
+        } else if (notification.action === "DeleteObject") {
+          await handleInvoiceDelete({ env, message, notification });
+        } else {
+          await handleInvoiceUpload({ env, message, notification });
+        }
       }
     }
   },
