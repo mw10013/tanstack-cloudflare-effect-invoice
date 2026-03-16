@@ -114,7 +114,7 @@ function RouteComponent() {
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+    <div className="mx-auto flex h-screen w-full max-w-3xl flex-col gap-4 overflow-hidden p-6">
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">
           Invoice Extraction Test
@@ -124,7 +124,7 @@ function RouteComponent() {
         </p>
       </header>
 
-      <Card>
+      <Card className="flex min-h-0 flex-1 flex-col">
         <CardHeader>
           <CardTitle>Run</CardTitle>
           <CardDescription>
@@ -132,13 +132,13 @@ function RouteComponent() {
             response format via AI Gateway (skipCache, cacheTtl 7d).
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
           <Textarea
             value={markdown}
             onChange={(event) => {
               setMarkdown(event.target.value);
             }}
-            className="min-h-64"
+            className="min-h-0 flex-1 resize-none"
           />
           <div className="flex flex-wrap gap-3">
             <Button
