@@ -54,18 +54,16 @@ From `json-mode.mdx` supported models list includes `@cf/meta/llama-3.3-70b-inst
 
 ### Response Shape
 
-With `messages`, the response is `{ response: <parsed_object> }` — the `response` field contains the already-parsed JSON object matching the schema. With `prompt`, the response is a plain string that needs JSON.parse.
+The TS types declare `response: string` but empirically with `json_schema` mode (both `prompt` and `messages`), `.response` is an **already-parsed object**, not a JSON string. The types lie.
 
-From json-mode.mdx response example:
-```json
-{
-  "response": {
-    "name": "India",
-    "capital": "New Delhi",
-    "languages": ["Hindi", "English", ...]
-  }
-}
+Observed with `prompt` + `json_schema`:
 ```
+raw type: object
+raw.response type: object
+raw.response: { isInvoice: true, total: '$5.39' }
+```
+
+Code must handle both cases: `typeof response === "string"` → JSON.parse, otherwise use directly.
 
 ## AI Gateway Caching
 

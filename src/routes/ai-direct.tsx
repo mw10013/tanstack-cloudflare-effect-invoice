@@ -69,15 +69,11 @@ const extractInvoice = createServerFn({ method: "POST" })
           },
         },
       );
-      let responseData: unknown;
-      if (typeof raw === "object" && raw !== null && "response" in raw) {
-        responseData = raw.response;
-      } else if (typeof raw === "string") {
-        responseData = JSON.parse(raw) as unknown;
-      } else {
-        responseData = raw;
-      }
-      const parsed = decodeInvoiceExtraction(responseData);
+      const response =
+        typeof raw === "string" ? raw : (raw as { response: unknown }).response;
+      const parsed = decodeInvoiceExtraction(
+        typeof response === "string" ? (JSON.parse(response) as unknown) : response,
+      );
       return {
         ok: true,
         model,
