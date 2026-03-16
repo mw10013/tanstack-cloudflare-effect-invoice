@@ -101,5 +101,5 @@ await env.AI.run(model, inputParams, {
 
 - Single transport: gateway with `skipCache: true`, `cacheTtl: 7 days`
 - Use `response_format: { type: "json_schema", json_schema: { name, schema } }` for structured extraction
-- Use `messages` array format for the prompt
+- Use `prompt` for one-shot calls; `messages` only if conversational context needed
 - Parse the `response` field from the result as JSON, then decode with Effect schema

@@ -53,12 +53,7 @@ const extractInvoice = createServerFn({ method: "POST" })
       const raw = await env.AI.run(
         model,
         {
-          messages: [
-            {
-              role: "user",
-              content: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
-            },
-          ],
+          prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
           response_format: {
             type: "json_schema" as const,
             json_schema: InvoiceExtractionJsonSchema,
