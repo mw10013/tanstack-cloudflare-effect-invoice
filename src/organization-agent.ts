@@ -1,12 +1,13 @@
+import type { AgentWorkflowEvent, AgentWorkflowStep } from "agents/workflows";
+
 import { Agent, callable } from "agents";
 import { AgentWorkflow } from "agents/workflows";
-import type { AgentWorkflowEvent, AgentWorkflowStep } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
 import {
-  decodeSimpleInvoiceProbe,
-  simpleInvoiceProbeJsonSchema,
-} from "@/lib/invoice-ai";
+  decodeInvoiceExtraction,
+  InvoiceExtractionJsonSchema,
+} from "@/lib/invoice-extraction";
 
 export interface OrganizationAgentState {
   readonly message: string;
@@ -39,7 +40,9 @@ const extractInvoiceJsonErrorPrefix = "extract-invoice-json:";
 
 const activeWorkflowStatuses = new Set(["queued", "running", "waiting"]);
 type InvoiceRow = typeof InvoiceRowSchema.Type;
-const decodeInvoiceRow = Schema.decodeUnknownSync(Schema.NullOr(InvoiceRowSchema));
+const decodeInvoiceRow = Schema.decodeUnknownSync(
+  Schema.NullOr(InvoiceRowSchema),
+);
 const decodeInvoices = Schema.decodeUnknownSync(Schema.Array(InvoiceRowSchema));
 
 export const extractAgentInstanceName = (request: Request) => {
@@ -94,7 +97,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       throw new TypeError(`Invalid eventTime: ${upload.eventTime}`);
     }
     const existing = decodeInvoiceRow(
-      this.sql<InvoiceRow>`select * from Invoice where id = ${upload.invoiceId}`[0] ??
+      this
+        .sql<InvoiceRow>`select * from Invoice where id = ${upload.invoiceId}`[0] ??
         null,
     );
     if (existing && eventTime < existing.eventTime) {
@@ -291,7 +295,9 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
 
   @callable()
   getInvoices() {
-    return decodeInvoices(this.sql`select * from Invoice order by createdAt desc`);
+    return decodeInvoices(
+      this.sql`select * from Invoice order by createdAt desc`,
+    );
   }
 }
 
@@ -338,7 +344,11 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       });
     });
     const invoiceJsonModel = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-    const runExtractInvoiceJson = async ({ attempt }: { readonly attempt: number }) => {
+    const runExtractInvoiceJson = async ({
+      attempt,
+    }: {
+      readonly attempt: number;
+    }) => {
       console.log("invoice extract json start", {
         invoiceId: event.payload.invoiceId,
         fileName: event.payload.fileName,
@@ -354,7 +364,7 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
             prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
             response_format: {
               type: "json_schema" as const,
-              json_schema: simpleInvoiceProbeJsonSchema,
+              json_schema: InvoiceExtractionJsonSchema,
             },
             max_tokens: 256,
             temperature: 0,
@@ -372,7 +382,9 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
           attempt,
           resultType: typeof result,
           hasResponse:
-            typeof result === "object" && result !== null && "response" in result,
+            typeof result === "object" &&
+            result !== null &&
+            "response" in result,
           preview:
             typeof result === "string"
               ? result.slice(0, 1000)
@@ -380,12 +392,12 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
         });
         const invoiceJson = (() => {
           if (typeof result === "string") {
-            return decodeSimpleInvoiceProbe(JSON.parse(result) as unknown);
+            return decodeInvoiceExtraction(JSON.parse(result) as unknown);
           }
           if (!("response" in result) || !result.response) {
             throw new Error("No response from AI model");
           }
-          return decodeSimpleInvoiceProbe(
+          return decodeInvoiceExtraction(
             typeof result.response === "string"
               ? (JSON.parse(result.response) as unknown)
               : result.response,
@@ -406,10 +418,15 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
           markdownLength: markdown.length,
           message,
         });
-        throw new Error(`${extractInvoiceJsonErrorPrefix} ${message}`, { cause: error });
+        throw new Error(`${extractInvoiceJsonErrorPrefix} ${message}`, {
+          cause: error,
+        });
       }
     };
-    const invoiceJson = await step.do("extract-invoice-json", runExtractInvoiceJson);
+    const invoiceJson = await step.do(
+      "extract-invoice-json",
+      runExtractInvoiceJson,
+    );
     await step.do("save-invoice-json", async () => {
       await this.agent.applyInvoiceJson({
         invoiceId: event.payload.invoiceId,

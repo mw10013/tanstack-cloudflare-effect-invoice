@@ -1,4 +1,5 @@
 import * as React from "react";
+
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
@@ -12,12 +13,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  decodeSimpleInvoiceProbe,
-  SAMPLE_INVOICE_MARKDOWN,
-  simpleInvoiceProbeJsonSchema,
-} from "@/lib/invoice-ai";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  decodeInvoiceExtraction,
+  SAMPLE_INVOICE_MARKDOWN,
+  InvoiceExtractionJsonSchema,
+} from "@/lib/invoice-extraction";
 
 type AiTransport = "direct" | "gateway" | "simple-schema-gateway";
 
@@ -47,10 +48,10 @@ interface RunAiInput {
 
 const parseSimpleResponse = (raw: unknown): unknown => {
   if (typeof raw === "string") {
-    return decodeSimpleInvoiceProbe(JSON.parse(raw) as unknown);
+    return decodeInvoiceExtraction(JSON.parse(raw) as unknown);
   }
   if (typeof raw === "object" && raw !== null && "response" in raw) {
-    return decodeSimpleInvoiceProbe(
+    return decodeInvoiceExtraction(
       typeof raw.response === "string"
         ? (JSON.parse(raw.response) as unknown)
         : raw.response,
@@ -73,7 +74,7 @@ const runAi = createServerFn({ method: "POST" })
             prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
             response_format: {
               type: "json_schema" as const,
-              json_schema: simpleInvoiceProbeJsonSchema,
+              json_schema: InvoiceExtractionJsonSchema,
             },
             max_tokens: 256,
             temperature: 0,
@@ -110,7 +111,14 @@ const runAi = createServerFn({ method: "POST" })
       } else {
         text = JSON.stringify(raw);
       }
-      return { ok: true, transport, model, elapsedMs, text, raw } satisfies AiSuccess;
+      return {
+        ok: true,
+        transport,
+        model,
+        elapsedMs,
+        text,
+        raw,
+      } satisfies AiSuccess;
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       return {
@@ -143,7 +151,8 @@ function RouteComponent() {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">AI Direct Test</h1>
         <p className="text-sm text-muted-foreground">
-          Known-good direct and gateway tests, plus the smallest invoice-schema repro.
+          Known-good direct and gateway tests, plus the smallest invoice-schema
+          repro.
         </p>
       </header>
 
@@ -151,7 +160,8 @@ function RouteComponent() {
         <CardHeader>
           <CardTitle>Run</CardTitle>
           <CardDescription>
-            Uses `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. `Run Simple Schema` is the only structured invoice test kept here.
+            Uses `@cf/meta/llama-3.3-70b-instruct-fp8-fast`. `Run Simple Schema`
+            is the only structured invoice test kept here.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -192,7 +202,8 @@ function RouteComponent() {
           </div>
           {mutation.data && (
             <p className="text-sm text-muted-foreground">
-              {mutation.data.transport} - {mutation.data.model} - {mutation.data.elapsedMs}ms
+              {mutation.data.transport} - {mutation.data.model} -{" "}
+              {mutation.data.elapsedMs}ms
             </p>
           )}
         </CardContent>
@@ -212,10 +223,10 @@ function RouteComponent() {
             <CardDescription>Text and raw payload</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-sm leading-5">
+            <pre className="overflow-auto rounded-md border bg-muted/30 p-4 text-sm leading-5 whitespace-pre-wrap">
               {mutation.data.text}
             </pre>
-            <pre className="overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
+            <pre className="overflow-auto rounded-md border bg-muted/30 p-4 text-xs leading-5 whitespace-pre-wrap">
               {JSON.stringify(mutation.data.raw, null, 2)}
             </pre>
           </CardContent>
