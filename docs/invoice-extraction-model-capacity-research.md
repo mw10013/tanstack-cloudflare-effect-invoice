@@ -98,6 +98,38 @@ Why this is a good next experiment:
 - changes the model family and API surface together, as Cloudflare intends for these models
 - avoids the mistaken assumption that `gpt-oss-120b` can be tested by only swapping the old model name under the old request shape
 
+## Latest server-log result
+
+From `logs/server.log` on the current `@cf/openai/gpt-oss-120b` run:
+
+- request path: gateway REST API against Workers AI
+- model: `@cf/openai/gpt-oss-120b`
+- elapsed time: `67,879ms`
+- result: response returned successfully from the provider
+- failure point: local decode/validation, not provider timeout
+
+What came back:
+
+- The model returned a full Responses API payload under `result`, not a top-level `output_text` field.
+- The response included long reasoning output plus a final assistant message containing JSON text.
+- The generated JSON was not valid for our schema as-is.
+
+Concrete evidence from the log:
+
+- Our decoder failed with `Missing key at ["output_text"]`.
+- The assistant message text contained malformed JSON: after `"amount": "$0.00"` the payload had an extra comma/newline before `"period"`.
+- The model also emitted fields beyond the schema we expected earlier in the investigation, but the immediate blocker here was invalid JSON plus the wrong extraction path on our side.
+
+What this means:
+
+- This experiment did not hit the earlier Workers AI timeout wall.
+- `@cf/openai/gpt-oss-120b` appears materially faster than the earlier constrained-decoding runs for this invoice.
+- But the model did not give us a clean schema-valid payload we can trust yet.
+- Part of the failure is ours: we assumed `output_text` would be top-level, but Workers AI wrapped the Responses API result inside `result`.
+- Part of the failure is model/output quality: the final JSON text itself was malformed.
+
+So the current signal is: better speed, worse output reliability than hoped.
+
 ## Findings
 
 ### 1. This does not look like just an underpowered-model problem
@@ -105,6 +137,7 @@ Why this is a good next experiment:
 - A 70B official JSON-mode model still times out on the full schema.
 - A 32B reasoning model can run for 9+ minutes and still fail schema satisfaction.
 - Faster non-official models are not a clean comparison because they appear not to do constrained decoding reliably.
+- `@cf/openai/gpt-oss-120b` returned in ~68s, which weakens the pure-capacity explanation further: speed improved, but output reliability is still a problem.
 
 If this were only about model size, the 70B official model would be more convincing than it currently is. Instead, the results point to a harder interaction between model capability, constrained decoding, large array-of-object output, and noisy markdown input.
 
@@ -130,6 +163,16 @@ The stronger signal is Cloudflare's own JSON mode warning that the model may not
 
 The binding path collapses too much useful error detail. The REST path gives us structured provider errors and request IDs, which makes the next experiments much more interpretable.
 
+### 5. `@cf/openai/gpt-oss-120b` changes the shape of the problem
+
+The new experiment suggests a different failure mode:
+
+- not an upstream timeout
+- not an explicit `JSON Mode couldn't be met`
+- instead, malformed JSON text inside a successful Responses API payload
+
+That is meaningful. It suggests this model family may avoid the worst constrained-decoding timeout behavior, but may still need post-parse validation or repair logic for large structured outputs.
+
 ## Assessment
 
 My read today:
@@ -137,8 +180,12 @@ My read today:
 - The evidence does not support a simple conclusion of `the models are underpowered`.
 - The evidence does support `Workers AI JSON mode struggles with this specific one-shot extraction shape`.
 - Model capability is still part of the story, but the bigger issue seems to be structured-output reliability under a large schema with many line items.
+- `@cf/openai/gpt-oss-120b` now adds a new nuance: stronger/faster models may avoid timeout, but still fail on output correctness.
 
-So yes, testing OpenAI is worth doing, but not just because it may be a bigger or smarter model. It is valuable because it tests a different structured-output stack under the same invoice/input conditions.
+So far the strongest updated read is:
+
+- older Workers AI JSON-mode path: often too slow or cannot satisfy the schema
+- `gpt-oss-120b` Responses path: fast enough to return, but still not reliably valid JSON for this large output
 
 ## Recommended next experiments
 
@@ -154,15 +201,17 @@ Why:
 
 What we want to learn:
 
-- does `gpt-oss-120b` return valid schema-conforming JSON for the full invoice?
-- is it faster than the earlier official JSON-mode models on this task?
-- does it fail as a timeout problem, a structured-output problem, or a plain extraction-quality problem?
+- can we correctly unwrap the Workers AI Responses payload from `result.output[*]` / assistant message content?
+- after fixing that, does `gpt-oss-120b` return valid schema-conforming JSON for the full invoice?
+- is it faster than the earlier official JSON-mode models on this task? Current evidence says yes.
+- does it ultimately fail as malformed JSON, schema drift, or extraction-quality error?
 
 Immediate follow-up if it fails:
 
-- try `@cf/openai/gpt-oss-120b` on header-only extraction
+- fix the local decode path to unwrap `result` correctly
+- retry `@cf/openai/gpt-oss-120b`
+- then try header-only extraction
 - compare full schema vs line-items-only schema
-- only then decide whether to test non-Workers-AI OpenAI via AI Gateway
 
 ### B. Isolate the expensive part on Workers AI
 
