@@ -133,9 +133,17 @@ Logged the actual JSON schema sent to the API. Every `NullOr(String)` generates 
 
 **Root cause identified: Workers AI's JSON mode does not support `anyOf` in schemas.** The `NullOr` combinator in Effect Schema produces `anyOf` unions which Workers AI cannot handle. This is undocumented — the Cloudflare docs only show simple types in their JSON schema examples.
 
-### Step 4: Drop NullOr entirely, use plain String — IN PROGRESS
+### Step 4: Drop NullOr entirely, use plain String — DONE, works after `pnpm clean`
 
-Replace all `NullOr(String)` with `String`. Missing values become empty string `""` instead of `null`. This eliminates all `anyOf` from the generated JSON schema.
+Replaced all `NullOr(String)` with `String`. Missing values become empty string `""` instead of `null`.
+
+**However:** Steps 1–3 all failed with 1031 even with progressively simpler schemas. Step 4 (plain String, no `anyOf`) succeeded — but only after `pnpm clean` and a fresh dev server restart. **This strongly suggests the prior failures were caused by a stale/corrupt dev environment, not schema complexity.** The `pnpm clean` likely cleared cached wrangler state, stale bindings, or a broken miniflare instance.
+
+**Revised root cause: Error 1031 was likely a stale dev environment issue**, not a JSON schema limitation. The `anyOf`, nested objects, and arrays may all work fine. However, since we can't be certain which factor contributed, we are proceeding conservatively: use plain `String` (no `anyOf`/`NullOr`) and test adding back features incrementally.
+
+### Step 5: Re-add lineItems array (no NullOr) — IN PROGRESS
+
+Adding back `lineItems: Schema.Array(LineItemSchema)` with all-String fields (no `NullOr`). This tests whether arrays of objects work in JSON mode after the clean environment.
 
 Original Step 2 proposed schema (for reference):
 
