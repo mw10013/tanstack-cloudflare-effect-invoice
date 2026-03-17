@@ -197,22 +197,56 @@ From `refs/cloudflare-docs/src/content/docs/ai-gateway/`:
 - `refs/cloudflare-docs/src/content/docs/ai-gateway/features/dynamic-routing/json-configuration.mdx` — dynamic routing timeout
 - `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai.mdx:118-125` — binding gateway options (no timeout)
 
+### max_tokens Research
+
+**Default max_tokens is 256.** We were explicitly setting 4096, which tells the model to reserve budget for up to 4096 output tokens. For ~40 line items of structured JSON, this is a large generation task that caused llama-3.3-70b to 504 timeout.
+
+Removing the explicit `max_tokens` lets the model use its default (256). But 256 may be too low for the full invoice with line items. The model stops when the JSON is structurally complete, so the actual output is likely ~2000-3000 tokens for ~40 line items.
+
+**Key question to test:** Does removing `max_tokens` (defaulting to 256) cause truncation? Or does the constrained decoding finish the JSON structure regardless? If truncated, we need to find the right value between 256 and 4096.
+
+### Official JSON Mode Models
+
+Only these models have constrained decoding (guaranteed valid JSON):
+
+| Model | Params | Context | Notes |
+|---|---|---|---|
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 70B | 24K | Best option. Slow for large output. |
+| `@cf/meta/llama-3.1-70b-instruct` | 70B | 24K | Same size, older. |
+| `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` | 32B | 80K | Reasoning model, $0.497/$4.881 per M. |
+| `@cf/meta/llama-3.1-8b-instruct-fast` | 8B | 128K | Too small. |
+| `@cf/meta/llama-3.2-11b-vision-instruct` | 11B | — | Vision model, small. |
+| `@hf/nousresearch/hermes-2-pro-mistral-7b` | 7B | — | Small. |
+| `@hf/thebloke/deepseek-coder-6.7b-instruct-awq` | 6.7B | 4K | Code-focused, deprecated 2025-10-01. |
+| `@cf/meta/llama-3-8b-instruct` | 8B | — | Old, small. |
+| `@cf/meta/llama-3.1-8b-instruct` | 8B | — | Small. |
+
+**Models NOT on JSON Mode list but have `response_format` in API schema:** Scout, GPT-OSS 120B/20B, Nemotron-3-120B, Qwen3-30B. These do NOT do constrained decoding — Scout confirmed to produce malformed JSON. The `response_format` API existing on a model does NOT mean it enforces valid JSON output.
+
+### Scout Conclusion — ABANDONED
+
+Scout does not do constrained decoding for JSON mode. It returns `response` as a JSON string (not parsed object) and produces **malformed JSON** for arrays of objects (misplaced commas, missing closing braces). This is consistent and reproducible, not transient. All models not on the official JSON Mode list should be assumed to have the same problem.
+
 ### Recommended Path Forward
 
-#### ~~Option A: Llama 3.3 70B + reduce output size~~ — REJECTED
+#### ~~Option A: Reduce output size~~ — REJECTED
 
 Can't restrict to a simplistic schema. Schema will grow over time.
 
-#### Option B: Llama 4 Scout + normalize response — IMPLEMENTING
+#### ~~Option B: Scout + JSON repair~~ — REJECTED
 
-Step 1: Normalize `ai.run()` response to handle both string and object formats. `normalizeAiResponse()` checks `typeof response === "string"` and `JSON.parse`s if needed. This makes the code model-agnostic.
-
-Step 2 (deferred): JSON repair for malformed output, if needed.
+Scout doesn't do constrained decoding. Malformed JSON is a model-level problem, not fixable in code without fragile heuristics.
 
 #### ~~Option C: Two-pass extraction~~ — REJECTED
 
 Two API calls adds too much complexity.
 
-#### ~~Option D: Workers AI REST API with AI Gateway timeout~~ — REJECTED
+#### ~~Option D: REST API with custom timeout~~ — REJECTED
 
 Must stick with Workers AI binding.
+
+#### Option E: Llama 3.3 70B + remove explicit max_tokens — TESTING
+
+Switch back to llama-3.3-70b. Remove explicit `max_tokens: 4096` — the 504 timeout may have been caused by reserving a huge output token budget. Default is 256. If the model truncates, incrementally increase.
+
+The `AiResponseSchema` now uses `Schema.Union([InvoiceExtractionSchema, Schema.fromJsonString(InvoiceExtractionSchema)])` to handle both object and string response formats idiomatically via Effect v4 Schema, making the code model-agnostic for future model switches.
