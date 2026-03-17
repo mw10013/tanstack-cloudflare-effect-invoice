@@ -1,12 +1,12 @@
 import * as Schema from "effect/Schema";
 
-const LineItemSchema = Schema.Struct({
-  description: Schema.String,
-  quantity: Schema.String,
-  unitPrice: Schema.String,
-  amount: Schema.String,
-  period: Schema.String,
-});
+// const LineItemSchema = Schema.Struct({
+//   description: Schema.String,
+//   quantity: Schema.String,
+//   unitPrice: Schema.String,
+//   amount: Schema.String,
+//   period: Schema.String,
+// });
 
 export const InvoiceExtractionSchema = Schema.Struct({
   isInvoice: Schema.Boolean,
@@ -20,7 +20,7 @@ export const InvoiceExtractionSchema = Schema.Struct({
   billToName: Schema.String,
   billToEmail: Schema.String,
   billToAddress: Schema.String,
-  lineItems: Schema.Array(LineItemSchema),
+  // lineItems: Schema.Array(LineItemSchema),
   subtotal: Schema.String,
   tax: Schema.String,
   total: Schema.String,
@@ -66,6 +66,7 @@ export const runInvoiceExtraction = async ({
     JSON.stringify(InvoiceExtractionJsonSchema, null, 2),
   );
   let raw: unknown;
+  const startedAt = Date.now();
   try {
     raw = await ai.run(
       INVOICE_EXTRACTION_MODEL,
@@ -107,12 +108,16 @@ ${markdown}`,
     );
   } catch (error) {
     console.error("[invoice-extraction] ai.run threw", {
+      elapsedMs: Date.now() - startedAt,
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
     throw error;
   }
-  console.log("[invoice-extraction] ai.run returned", JSON.stringify(raw));
+  console.log("[invoice-extraction] ai.run returned", {
+    elapsedMs: Date.now() - startedAt,
+    raw: JSON.stringify(raw),
+  });
   try {
     const decoded = decodeAiResponse(raw);
     console.log("[invoice-extraction] decoded", decoded);
