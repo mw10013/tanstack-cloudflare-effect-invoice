@@ -141,9 +141,13 @@ Replaced all `NullOr(String)` with `String`. Missing values become empty string 
 
 **Revised root cause: Error 1031 was likely a stale dev environment issue**, not a JSON schema limitation. The `anyOf`, nested objects, and arrays may all work fine. However, since we can't be certain which factor contributed, we are proceeding conservatively: use plain `String` (no `anyOf`/`NullOr`) and test adding back features incrementally.
 
-### Step 5: Re-add lineItems array (no NullOr) — IN PROGRESS
+### Step 5: Re-add lineItems array (no NullOr) with llama-3.3-70b — DONE, 504 Gateway Time-out
 
-Adding back `lineItems: Schema.Array(LineItemSchema)` with all-String fields (no `NullOr`). This tests whether arrays of objects work in JSON mode after the clean environment.
+Added back `lineItems: Schema.Array(LineItemSchema)` with all-String fields. Got `504 Gateway Time-out` (not 1031). The model is trying to generate ~40 line items with constrained decoding and exceeds Cloudflare's upstream timeout. This is the same class of issue as #12398 — large structured output overwhelms the internal token/time budget.
+
+### Step 6: Try Llama 4 Scout with lineItems — IN PROGRESS
+
+Scout is MoE with 17B active params (vs 70B dense) so generates faster. May complete within the timeout window.
 
 Original Step 2 proposed schema (for reference):
 
