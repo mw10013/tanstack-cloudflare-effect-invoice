@@ -87,6 +87,30 @@ The llama-3.3-70b model or Workers AI's JSON mode implementation can't handle ou
 
 Error 1031 appears across D1, AI, and markdown conversion — all unrelated services. It may be a general upstream timeout or routing failure. The expanded schema requires more output tokens (4096 vs 256) and more processing time, which could trigger timeouts.
 
+## Relevant GitHub Issues
+
+### cloudflare/workers-sdk#10801 — D1_ERROR with 1031 (Open)
+
+`D1_ERROR: Failed to parse body as JSON, got: error code: 1031` when D1 remote bindings go idle. Labeled `bug`, `d1`, `remote-bindings`. Status: Backlog. No Cloudflare response. Confirms 1031 is a remote binding infrastructure error, not AI-specific.
+
+### cloudflare/workers-sdk#10857 — Workers AI InferenceUpstreamError (Closed)
+
+`InferenceUpstreamError: Error: internal error` with `@hf/nousresearch/hermes-2-pro-mistral-7b` on wrangler >4.35.0. Simple hello world prompt (no JSON mode). Labeled `awaiting Cloudflare response`. Closed without resolution comment visible. This was a wrangler version regression, not related to schema complexity.
+
+### cloudflare/workers-sdk#12398 — `response` field type incorrect with JSON Mode (Open)
+
+User with `@hf/nousresearch/hermes-2-pro-mistral-7b` and a schema with **array of objects** (quiz questions) gets `InferenceUpstreamError: 3025: error with TGI API: max_new_tokens must be <= 1024. Given: 1321`. The JSON schema + prompt tokens are being counted against `max_new_tokens` internally. Labeled `internal`, `workers ai`. **This is the closest issue to ours** — complex schema with arrays of objects, JSON mode, InferenceUpstreamError.
+
+Key detail from #12398: Workers AI's internal token accounting appears to add the schema token cost to the output token budget. With complex schemas, this can exceed internal limits (1024 for hermes, likely different for llama-3.3-70b). Our schema is ~30 fields with nested structs — this plausibly pushes the internal token budget over a limit, producing error 1031 instead of the more descriptive 3025 error.
+
+### Cloudflare Discord — Error 1031 with ai.toMarkdown()
+
+User "Anton" (Dec 2025) reported error 1031 with `ai.toMarkdown()` for JPG conversion. Cloudflare responded asking for more details but noted it was different from documented errors. Confirms 1031 is used across multiple AI subsystems.
+
+### Summary
+
+No one has reported a complex `json_schema` causing error 1031 specifically. But #12398 shows that complex schemas with arrays of objects DO cause InferenceUpstreamErrors due to internal token accounting bugs. Our situation is likely the same class of problem with a different error code.
+
 ## Recommended Next Steps
 
 ### Step 1: Try Llama 4 Scout
