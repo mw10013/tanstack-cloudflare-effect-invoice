@@ -206,6 +206,8 @@ Stay with llama-3.3-70b (reliable constrained decoding). Reduce the number of li
 - Or cap: "Extract up to 15 line items, prioritizing those with non-zero amounts"
 - Trade-off: Loses zero-amount line items. May be acceptable since they carry no financial value.
 
+Remove this option. We can't be restricted to a simplistic schema. We're just starting experimnts and expect the schema will grow over time.
+
 #### Option B: Llama 4 Scout + fix decode + repair JSON
 
 Use Scout for speed. Fix the two issues in code:
@@ -213,13 +215,20 @@ Use Scout for speed. Fix the two issues in code:
 2. Attempt JSON repair on malformed output (e.g., regex fix for misplaced commas, or use a lenient JSON parser)
 - Trade-off: Fragile. JSON repair is heuristic — may break on different invoice formats. The malformed comma pattern may not be consistent.
 
+Let's try 1 to see how far it gets. Make it so it can handle string or object so we can switch models more easily.
+Defer 2 for now.
+
 #### Option C: Two-pass extraction
 
 Pass 1: Llama 3.3 70B extracts header fields (no lineItems) — already proven to work.
 Pass 2: Separate call to extract line items only, with a simpler schema.
 - Trade-off: Two API calls, more latency and cost. But each call is within timeout limits.
 
+Remove this option. 2 pass sucks.
+
 #### Option D: Workers AI REST API with AI Gateway timeout
 
 Instead of the `ai.run()` binding, call Workers AI via the REST API through AI Gateway with a custom `requestTimeout`. This lets llama-3.3-70b complete the full extraction without the default timeout killing it.
 - Trade-off: More complex code (HTTP client instead of binding), need to manage API tokens. But preserves reliable constrained decoding.
+
+Remove this option. Need to stick with workers ai binding.
