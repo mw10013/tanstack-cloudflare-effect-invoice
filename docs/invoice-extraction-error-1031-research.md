@@ -199,27 +199,33 @@ From `refs/cloudflare-docs/src/content/docs/ai-gateway/`:
 
 ### max_tokens Research
 
-**Default max_tokens is 256.** We were explicitly setting 4096, which tells the model to reserve budget for up to 4096 output tokens. For ~40 line items of structured JSON, this is a large generation task that caused llama-3.3-70b to 504 timeout.
+**Default max_tokens is 256.** Far too small for structured JSON with line items — a 40-item invoice needs ~3500 output tokens. We set 8192 to handle large invoices (100+ items) without truncation. `max_tokens` is a ceiling — model stops when JSON is complete, higher values don't cause slower generation.
 
-Removing the explicit `max_tokens` lets the model use its default (256). But 256 may be too low for the full invoice with line items. The model stops when the JSON is structurally complete, so the actual output is likely ~2000-3000 tokens for ~40 line items.
+### Timing Results
 
-**Key question to test:** Does removing `max_tokens` (defaulting to 256) cause truncation? Or does the constrained decoding finish the JSON structure regardless? If truncated, we need to find the right value between 256 and 4096.
+| Config | Model | lineItems | max_tokens | Result | Time |
+|---|---|---|---|---|---|
+| Step 7 | llama-3.3-70b | yes (40 items) | 8192 | 504 Gateway Time-out | ~60s (timeout) |
+| Step 8 | llama-3.3-70b | no (commented out) | 8192 | Success | 31,309ms |
+
+**The gateway timeout appears to be ~60 seconds.** Flat schema (15 string fields) takes ~31s on llama-3.3-70b. Adding ~40 line items would roughly triple the output tokens, pushing well past 60s.
+
+This is a hard infrastructure limit. The `ai.run()` binding gateway config only supports `id`, `skipCache`, `cacheTtl` — no timeout parameter. AI Gateway does support `requestTimeout` via Universal Endpoint / `cf-aig-request-timeout` header, but not through the binding.
 
 ### Official JSON Mode Models
 
 Only these models have constrained decoding (guaranteed valid JSON):
 
-| Model | Params | Context | Notes |
-|---|---|---|---|
-| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 70B | 24K | Best option. Slow for large output. |
-| `@cf/meta/llama-3.1-70b-instruct` | 70B | 24K | Same size, older. |
-| `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` | 32B | 80K | Reasoning model, $0.497/$4.881 per M. |
-| `@cf/meta/llama-3.1-8b-instruct-fast` | 8B | 128K | Too small. |
-| `@cf/meta/llama-3.2-11b-vision-instruct` | 11B | — | Vision model, small. |
-| `@hf/nousresearch/hermes-2-pro-mistral-7b` | 7B | — | Small. |
-| `@hf/thebloke/deepseek-coder-6.7b-instruct-awq` | 6.7B | 4K | Code-focused, deprecated 2025-10-01. |
-| `@cf/meta/llama-3-8b-instruct` | 8B | — | Old, small. |
-| `@cf/meta/llama-3.1-8b-instruct` | 8B | — | Small. |
+| Model | Params | Context | Pricing (in/out per M) | Notes |
+|---|---|---|---|---|
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 70B dense | 24K | $0.293/$2.253 | Proven reliable. Slow — 31s for flat schema. |
+| `@cf/meta/llama-3.1-70b-instruct` | 70B dense | 24K | $0.293/$2.253 | Same size, older, not fp8-fast. |
+| **`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`** | **32B dense** | **80K** | **$0.497/$4.881** | **Reasoning model. 32B = ~2x faster generation than 70B. 80K context. "Outperforms o1-mini across benchmarks."** |
+| `@cf/meta/llama-3.1-8b-instruct-fast` | 8B | 128K | — | Too small for extraction quality. |
+| `@cf/meta/llama-3.2-11b-vision-instruct` | 11B | — | — | Vision model, small. |
+| Others (7-8B) | — | — | — | Too small. |
+
+**DeepSeek R1 Distill Qwen 32B is the most promising alternative.** It's on the official JSON Mode list (constrained decoding guaranteed), 32B params (roughly 2x faster than 70B), 80K context window, and is a reasoning model which may produce better structured output. More expensive per token but if it completes within the timeout, cost is secondary.
 
 **Models NOT on JSON Mode list but have `response_format` in API schema:** Scout, GPT-OSS 120B/20B, Nemotron-3-120B, Qwen3-30B. These do NOT do constrained decoding — Scout confirmed to produce malformed JSON. The `response_format` API existing on a model does NOT mean it enforces valid JSON output.
 
@@ -245,8 +251,16 @@ Two API calls adds too much complexity.
 
 Must stick with Workers AI binding.
 
-#### Option E: Llama 3.3 70B + remove explicit max_tokens — TESTING
+#### ~~Option E: Llama 3.3 70B + remove max_tokens~~ — WRONG
 
-Switch back to llama-3.3-70b. Remove explicit `max_tokens: 4096` — the 504 timeout may have been caused by reserving a huge output token budget. Default is 256. If the model truncates, incrementally increase.
+max_tokens is a ceiling, not a reservation. Removing it would just truncate output. The 504 is caused by generation time on the 70B model, not token budget.
 
-The `AiResponseSchema` now uses `Schema.Union([InvoiceExtractionSchema, Schema.fromJsonString(InvoiceExtractionSchema)])` to handle both object and string response formats idiomatically via Effect v4 Schema, making the code model-agnostic for future model switches.
+#### Option F: Try DeepSeek R1 Distill Qwen 32B — NEXT
+
+Switch to `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` with lineItems re-enabled. It's on the official JSON Mode list (constrained decoding), 32B params (should generate ~2x faster than 70B), 80K context. If 31s for flat schema on 70B, the full schema with lineItems on 32B might complete in ~45-50s — tight but potentially within the ~60s timeout.
+
+### Code State
+
+- `AiResponseSchema` uses `Schema.Union([InvoiceExtractionSchema, Schema.fromJsonString(InvoiceExtractionSchema)])` to handle both object and string response formats idiomatically via Effect v4 Schema, making the code model-agnostic for future model switches.
+- Server-side timing added to `ai.run()` calls (both success and error paths).
+- `max_tokens: 8192` with comment explaining why default 256 is too small.
