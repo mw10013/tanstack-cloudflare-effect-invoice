@@ -36,7 +36,7 @@ export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
 ).schema;
 
 export const INVOICE_EXTRACTION_MODEL: keyof AiModels =
-  "@cf/meta/llama-4-scout-17b-16e-instruct";
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
 const decodeAiResponse = Schema.decodeUnknownSync(
   Schema.Struct({ response: InvoiceExtractionSchema }),
