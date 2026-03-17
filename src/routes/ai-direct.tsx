@@ -14,8 +14,10 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT,
   INVOICE_EXTRACTION_MODEL,
   SAMPLE_INVOICE_MARKDOWN,
+  runInvoiceExtraction,
   runInvoiceExtractionViaGateway,
 } from "@/lib/invoice-extraction";
 
@@ -31,26 +33,35 @@ const extractInvoice = createServerFn({ method: "POST" })
   .handler(async ({ data: { markdown }, context: { env } }) => {
     const startedAt = Date.now();
     try {
-      const parsed = await runInvoiceExtractionViaGateway({
-        accountId: env.CF_ACCOUNT_ID,
-        gatewayId: env.AI_GATEWAY_ID,
-        workersAiApiToken: env.WORKERS_AI_API_TOKEN,
-        aiGatewayToken: env.AI_GATEWAY_TOKEN,
-        markdown,
-      });
+      const parsed =
+        INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT === "binding"
+          ? await runInvoiceExtraction({
+              ai: env.AI,
+              gatewayId: env.AI_GATEWAY_ID,
+              markdown,
+            })
+          : await runInvoiceExtractionViaGateway({
+              accountId: env.CF_ACCOUNT_ID,
+              gatewayId: env.AI_GATEWAY_ID,
+              workersAiApiToken: env.WORKERS_AI_API_TOKEN,
+              aiGatewayToken: env.AI_GATEWAY_TOKEN,
+              markdown,
+            });
       return {
         ok: true as const,
         model: INVOICE_EXTRACTION_MODEL,
+        transport: INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT,
         elapsedMs: Date.now() - startedAt,
         parsed,
       };
     } catch (error) {
-      return {
-        ok: false as const,
-        model: INVOICE_EXTRACTION_MODEL,
-        elapsedMs: Date.now() - startedAt,
-        error:
-          error instanceof Error
+        return {
+          ok: false as const,
+          model: INVOICE_EXTRACTION_MODEL,
+          transport: INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT,
+          elapsedMs: Date.now() - startedAt,
+          error:
+            error instanceof Error
             ? `${error.name}: ${error.message}`
             : String(error),
       };
@@ -78,7 +89,7 @@ function RouteComponent() {
           Invoice Extraction Test
         </h1>
         <p className="text-sm text-muted-foreground">
-          Extract structured invoice data via Workers AI through the REST gateway experiment path.
+          Extract structured invoice data via the current Workers AI experiment transport.
         </p>
       </header>
 
@@ -86,8 +97,7 @@ function RouteComponent() {
         <CardHeader>
           <CardTitle>Run</CardTitle>
           <CardDescription>
-            Uses {INVOICE_EXTRACTION_MODEL} via Workers AI REST through AI
-            Gateway with skip-cache enabled for uncached experiments.
+            Uses {INVOICE_EXTRACTION_MODEL} via {INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT}.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -111,7 +121,7 @@ function RouteComponent() {
           {mutation.data && (
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
               <p className="text-sm text-muted-foreground">
-                {mutation.data.model} - {mutation.data.elapsedMs}ms
+                {mutation.data.model} via {mutation.data.transport} - {mutation.data.elapsedMs}ms
               </p>
               {!mutation.data.ok && (
                 <p className="text-sm text-destructive">{mutation.data.error}</p>

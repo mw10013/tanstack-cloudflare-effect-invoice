@@ -158,6 +158,8 @@ const decodeInvoiceExtractionResponse = (raw: unknown) => {
   return decodeAiResponse(raw).response;
 };
 
+export const INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT = "binding" as const;
+
 export const runInvoiceExtraction = async ({
   ai,
   gatewayId,
@@ -169,6 +171,7 @@ export const runInvoiceExtraction = async ({
 }) => {
   console.log("[invoice-extraction] starting via ai.run()", {
     model: INVOICE_EXTRACTION_MODEL,
+    transport: INVOICE_EXTRACTION_EXPERIMENT_TRANSPORT,
     gatewayId,
     markdownLength: markdown.length,
   });
