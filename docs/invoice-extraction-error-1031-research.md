@@ -81,23 +81,66 @@ Default is 256 — far too small for structured JSON with line items. Set to 819
 
 See main experiment results table above. Qwen3 timed out (3046), DeepSeek R1 couldn't meet JSON schema (5024).
 
-## Next: AI Gateway REST API with Custom Timeout
+## AI Gateway REST API Experiments
 
-Instead of `ai.run()` binding (which has no timeout config), call Workers AI via the AI Gateway REST API with `cf-aig-request-timeout` header.
+Implemented `runInvoiceExtractionViaGateway()` alongside original `runInvoiceExtraction()` (binding version preserved).
 
-**URL format:** `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/{model_id}`
+**URL:** `https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/{model_id}`
 
-**Headers:**
-- `Authorization: Bearer {WORKERS_AI_API_TOKEN}`
-- `cf-aig-authorization: Bearer {AI_GATEWAY_TOKEN}` (gateway auth)
-- `cf-aig-request-timeout: 120000` (ms — 2 minutes, doubling the ~60s default)
-- `Content-Type: application/json`
+**Headers:** `Authorization`, `cf-aig-authorization`, `cf-aig-request-timeout`, `Content-Type`
 
-**Available env vars:** `CF_ACCOUNT_ID`, `AI_GATEWAY_ID`, `WORKERS_AI_API_TOKEN`, `AI_GATEWAY_TOKEN` — all present in wrangler.jsonc vars and .env.
+### Result: 120s gateway timeout — still failed
 
-**Note:** Timeout is based on first response byte. JSON mode doesn't support streaming, so this is effectively total request duration.
+```
+elapsedMs: 120,641
+status: 408
+error: { code: 2014, message: "Provider request timeout" }
+```
+
+The gateway timeout worked — request ran 2 min, not 60s. But **Workers AI itself timed out**. Error `2014: Provider request timeout` means the gateway waited, but the upstream Workers AI provider hit its own internal timeout.
+
+**Two separate timeouts:**
+1. **AI Gateway timeout** (`cf-aig-request-timeout`) — we control this ✓
+2. **Workers AI provider timeout** — internal to Cloudflare, we do NOT control
+
+The `ai.run()` binding was hitting the same Workers AI provider timeout — the 504 HTML was just a worse representation of the same limit.
+
+### Result: 300s gateway timeout — still failed at ~120s
+
+```
+elapsedMs: 120,918
+status: 408
+error: { code: 3046, message: "Request timeout", requestId: "21fa6995-..." }
+```
+
+Workers AI timed out at ~120s despite our 300s gateway timeout. The provider has a hard internal timeout we cannot override.
+
+**But:** DeepSeek R1 ran for **544,143ms (9+ minutes)** before returning `5024: JSON Model couldn't be met`. This means Workers AI does NOT have a universal 120s timeout. The timeout varies — possibly:
+- **Per-model timeout:** 70B dense models get 120s, reasoning models get longer
+- **Timeout vs constraint failure:** The 120s limit may apply to generation time, while DeepSeek's 544s was spent in the constrained decoding retry loop (different code path, different timeout)
+- **Token generation timeout:** If the model stops producing tokens for some period, it times out. DeepSeek was actively generating (but failing to meet constraints), while llama-3.3-70b may have been stuck in constrained decoding
+
+**Key insight:** The timeout is not something we can control from outside. It's internal to Workers AI's inference infrastructure and varies by model/situation.
+
+### Where This Leaves Us
+
+| Model | JSON Mode | Speed | Problem |
+|---|---|---|---|
+| llama-3.3-70b | Official, constrained decoding ✓ | Too slow (70B dense) | 3046 timeout at ~120s |
+| deepseek-r1-qwen-32b | Official, constrained decoding ✓ | Ran 544s | 5024 JSON Model couldn't be met |
+| qwen3-30b-a3b-fp8 | NOT official | Fast (3B active MoE) | 3046 timeout at ~60s |
+| llama-4-scout | NOT official | Fast (17B active MoE) | Malformed JSON, no constrained decoding |
+
+No Workers AI model can currently extract ~40 structured line items via JSON mode within the provider timeout. The fundamental issue is that constrained JSON decoding on Workers AI is too slow for large structured output.
+
+### Remaining viable options
+
+1. **External model via AI Gateway** — route to OpenAI/Anthropic which handle structured output much faster. AI Gateway supports this.
+2. **Drop JSON mode, use plain text** — prompt llama to output JSON as text (no constrained decoding), then parse. Faster but no validity guarantee.
+3. **Reduce line items** — extract only non-zero amount items (cuts ~40 to ~3 for this invoice). Schema stays full, just less data.
+4. **Wait for Cloudflare** — file support ticket, wait for faster models or higher timeouts.
 
 **Refs:**
-- `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai.mdx` — URL format
-- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/request-handling.mdx` — timeout config
-- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/authentication.mdx` — auth headers
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai.mdx`
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/request-handling.mdx`
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/authentication.mdx`

@@ -146,7 +146,7 @@ export const runInvoiceExtraction = async ({
 // timeout that cannot be configured. The REST API lets us set a custom timeout
 // via cf-aig-request-timeout header. 120s gives llama-3.3-70b enough time
 // to generate ~40 structured line items with constrained JSON decoding.
-const GATEWAY_REQUEST_TIMEOUT_MS = 120_000;
+const GATEWAY_REQUEST_TIMEOUT_MS = 300_000;
 
 export const runInvoiceExtractionViaGateway = async ({
   accountId,
