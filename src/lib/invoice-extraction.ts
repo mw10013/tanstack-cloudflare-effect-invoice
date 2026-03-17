@@ -8,24 +8,18 @@ const LineItemSchema = Schema.Struct({
   period: Schema.NullOr(Schema.String),
 });
 
-const AddressSchema = Schema.Struct({
-  name: Schema.NullOr(Schema.String),
-  street: Schema.NullOr(Schema.String),
-  city: Schema.NullOr(Schema.String),
-  state: Schema.NullOr(Schema.String),
-  postalCode: Schema.NullOr(Schema.String),
-  country: Schema.NullOr(Schema.String),
-  email: Schema.NullOr(Schema.String),
-});
-
 export const InvoiceExtractionSchema = Schema.Struct({
   isInvoice: Schema.Boolean,
   invoiceNumber: Schema.NullOr(Schema.String),
   invoiceDate: Schema.NullOr(Schema.String),
   dueDate: Schema.NullOr(Schema.String),
   currency: Schema.NullOr(Schema.String),
-  vendor: Schema.NullOr(AddressSchema),
-  billTo: Schema.NullOr(AddressSchema),
+  vendorName: Schema.NullOr(Schema.String),
+  vendorEmail: Schema.NullOr(Schema.String),
+  vendorAddress: Schema.NullOr(Schema.String),
+  billToName: Schema.NullOr(Schema.String),
+  billToEmail: Schema.NullOr(Schema.String),
+  billToAddress: Schema.NullOr(Schema.String),
   lineItems: Schema.NullOr(Schema.Array(LineItemSchema)),
   subtotal: Schema.NullOr(Schema.String),
   tax: Schema.NullOr(Schema.String),
@@ -42,7 +36,7 @@ export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
 ).schema;
 
 export const INVOICE_EXTRACTION_MODEL: keyof AiModels =
-  "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+  "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 const decodeAiResponse = Schema.decodeUnknownSync(
   Schema.Struct({ response: InvoiceExtractionSchema }),
@@ -79,7 +73,7 @@ Rules:
 - Keep amounts as strings exactly as they appear in the document, including currency symbols (e.g., "$5.39", "$0.011 per 1,000").
 - Keep dates as strings in whatever format appears in the document.
 - For line items, include every line item found. Set quantity, unitPrice, or amount to null if not clearly stated for that item.
-- For addresses, extract whatever address components are present. Set missing components to null.
+- For addresses, concatenate all address components into a single string (e.g., "101 Townsend Street, San Francisco, California 94107, United States"). Set to null if no address is found.
 
 Document:
 
