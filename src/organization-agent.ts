@@ -4,10 +4,7 @@ import { Agent, callable } from "agents";
 import { AgentWorkflow } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
-import {
-  decodeInvoiceExtraction,
-  InvoiceExtractionJsonSchema,
-} from "@/lib/invoice-extraction";
+import { runInvoiceExtraction } from "@/lib/invoice-extraction";
 
 export interface OrganizationAgentState {
   readonly message: string;
@@ -310,129 +307,98 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
     event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
     step: AgentWorkflowStep,
   ) {
+    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW started", {
+      invoiceId: event.payload.invoiceId,
+      r2ObjectKey: event.payload.r2ObjectKey,
+      fileName: event.payload.fileName,
+    });
     const pdfBytes = await step.do("load-pdf", async () => {
+      console.log("[workflow:load-pdf] fetching from R2", event.payload.r2ObjectKey);
       const object = await this.env.R2.get(event.payload.r2ObjectKey);
       if (!object) {
         throw new Error(`Invoice PDF not found: ${event.payload.r2ObjectKey}`);
       }
-      return new Uint8Array(await object.arrayBuffer());
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      console.log("[workflow:load-pdf] loaded", { bytes: bytes.byteLength });
+      return bytes;
     });
     const markdown = await step.do("convert-pdf-to-markdown", async () => {
-      const result = await this.env.AI.toMarkdown(
-        {
-          name: event.payload.fileName,
-          blob: new Blob([pdfBytes], { type: "application/pdf" }),
-        },
-        { conversionOptions: { pdf: { metadata: false } } },
-      );
+      console.log("[workflow:convert-pdf] calling AI.toMarkdown", {
+        fileName: event.payload.fileName,
+        pdfSize: pdfBytes.byteLength,
+      });
+      let result: Awaited<ReturnType<typeof this.env.AI.toMarkdown>>;
+      try {
+        result = await this.env.AI.toMarkdown(
+          {
+            name: event.payload.fileName,
+            blob: new Blob([pdfBytes], { type: "application/pdf" }),
+          },
+          { conversionOptions: { pdf: { metadata: false } } },
+        );
+      } catch (error) {
+        console.error("[workflow:convert-pdf] AI.toMarkdown threw", {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+        throw error;
+      }
       if (result.format === "error") {
+        console.error("[workflow:convert-pdf] error format", { error: result.error });
         throw new Error(result.error);
       }
-      console.log("invoice markdown ready", {
-        invoiceId: event.payload.invoiceId,
-        fileName: event.payload.fileName,
+      console.log("[workflow:convert-pdf] success", {
+        format: result.format,
         tokens: result.tokens,
         length: result.data.length,
       });
       return result.data;
     });
     await step.do("save-markdown", async () => {
+      console.log("[workflow:save-markdown]", {
+        invoiceId: event.payload.invoiceId,
+        markdownLength: markdown.length,
+      });
       await this.agent.applyInvoiceMarkdown({
         invoiceId: event.payload.invoiceId,
         idempotencyKey: event.payload.idempotencyKey,
         markdown,
       });
     });
-    const invoiceJsonModel = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
-    const runExtractInvoiceJson = async ({
-      attempt,
-    }: {
-      readonly attempt: number;
-    }) => {
-      console.log("invoice extract json start", {
-        invoiceId: event.payload.invoiceId,
-        fileName: event.payload.fileName,
-        attempt,
-        environment: this.env.ENVIRONMENT,
-        markdownLength: markdown.length,
-        model: invoiceJsonModel,
-      });
+    const invoiceJson = await step.do("extract-invoice-json", async () => {
+      console.log("[workflow:extract-json] starting extraction");
       try {
-        const result = await this.env.AI.run(
-          invoiceJsonModel,
-          {
-            prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
-            response_format: {
-              type: "json_schema" as const,
-              json_schema: InvoiceExtractionJsonSchema,
-            },
-            max_tokens: 256,
-            temperature: 0,
-          },
-          {
-            gateway: {
-              id: this.env.AI_GATEWAY_ID,
-              skipCache: true,
-              cacheTtl: 7 * 24 * 60 * 60,
-            },
-          },
-        );
-        console.log("invoice extract json raw result", {
-          invoiceId: event.payload.invoiceId,
-          attempt,
-          resultType: typeof result,
-          hasResponse:
-            typeof result === "object" &&
-            result !== null &&
-            "response" in result,
-          preview:
-            typeof result === "string"
-              ? result.slice(0, 1000)
-              : JSON.stringify(result).slice(0, 1000),
+        const result = await runInvoiceExtraction({
+          ai: this.env.AI,
+          gatewayId: this.env.AI_GATEWAY_ID,
+          markdown,
         });
-        const invoiceJson = (() => {
-          if (typeof result === "string") {
-            return decodeInvoiceExtraction(JSON.parse(result) as unknown);
-          }
-          if (!("response" in result) || !result.response) {
-            throw new Error("No response from AI model");
-          }
-          return decodeInvoiceExtraction(
-            typeof result.response === "string"
-              ? (JSON.parse(result.response) as unknown)
-              : result.response,
-          );
-        })();
-        console.log("invoice extract json success", {
-          invoiceId: event.payload.invoiceId,
-          attempt,
-        });
-        return invoiceJson;
+        console.log("[workflow:extract-json] success", result);
+        return result;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("invoice extract json failed", {
-          invoiceId: event.payload.invoiceId,
-          fileName: event.payload.fileName,
-          attempt,
-          environment: this.env.ENVIRONMENT,
-          markdownLength: markdown.length,
-          message,
+        console.error("[workflow:extract-json] failed", {
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
         });
-        throw new Error(`${extractInvoiceJsonErrorPrefix} ${message}`, {
-          cause: error,
-        });
+        throw new Error(
+          `${extractInvoiceJsonErrorPrefix} ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
       }
-    };
-    const invoiceJson = await step.do(
-      "extract-invoice-json",
-      runExtractInvoiceJson,
-    );
+    });
     await step.do("save-invoice-json", async () => {
+      console.log("[workflow:save-json]", {
+        invoiceId: event.payload.invoiceId,
+        invoiceJson,
+      });
       await this.agent.applyInvoiceJson({
         invoiceId: event.payload.invoiceId,
         idempotencyKey: event.payload.idempotencyKey,
         invoiceJson: JSON.stringify(invoiceJson),
       });
+    });
+    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
+      invoiceId: event.payload.invoiceId,
     });
     return { invoiceId: event.payload.invoiceId };
   }

@@ -3,7 +3,6 @@ import * as React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
-import * as Schema from "effect/Schema";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,27 +14,10 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  InvoiceExtractionScheme,
+  INVOICE_EXTRACTION_MODEL,
   SAMPLE_INVOICE_MARKDOWN,
-  InvoiceExtractionJsonSchema,
+  runInvoiceExtraction,
 } from "@/lib/invoice-extraction";
-
-interface AiSuccess {
-  ok: true;
-  model: string;
-  elapsedMs: number;
-  parsed: unknown;
-  raw: unknown;
-}
-
-interface AiFailure {
-  ok: false;
-  model: string;
-  elapsedMs: number;
-  error: string;
-}
-
-type AiResult = AiSuccess | AiFailure;
 
 const beforeLoadServerFn = createServerFn().handler(
   ({ context: { env } }) => {
@@ -47,48 +29,29 @@ const beforeLoadServerFn = createServerFn().handler(
 const extractInvoice = createServerFn({ method: "POST" })
   .inputValidator((input: { markdown: string }) => input)
   .handler(async ({ data: { markdown }, context: { env } }) => {
-    const model: keyof AiModels = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
     const startedAt = Date.now();
     try {
-      const raw = await env.AI.run(
-        model,
-        {
-          prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
-          response_format: {
-            type: "json_schema" as const,
-            json_schema: InvoiceExtractionJsonSchema,
-          },
-          max_tokens: 256,
-          temperature: 0,
-        },
-        {
-          gateway: {
-            id: env.AI_GATEWAY_ID,
-            skipCache: true,
-            cacheTtl: 7 * 24 * 60 * 60,
-          },
-        },
-      );
-      const { response } = Schema.decodeUnknownSync(
-        Schema.Struct({ response: InvoiceExtractionScheme }),
-      )(raw);
+      const parsed = await runInvoiceExtraction({
+        ai: env.AI,
+        gatewayId: env.AI_GATEWAY_ID,
+        markdown,
+      });
       return {
-        ok: true,
-        model,
+        ok: true as const,
+        model: INVOICE_EXTRACTION_MODEL,
         elapsedMs: Date.now() - startedAt,
-        parsed: response,
-        raw,
-      } satisfies AiSuccess;
+        parsed,
+      };
     } catch (error) {
       return {
-        ok: false,
-        model,
+        ok: false as const,
+        model: INVOICE_EXTRACTION_MODEL,
         elapsedMs: Date.now() - startedAt,
         error:
           error instanceof Error
             ? `${error.name}: ${error.message}`
             : String(error),
-      } satisfies AiFailure;
+      };
     }
   });
 
@@ -102,9 +65,8 @@ export const Route = createFileRoute("/ai-direct")({
 function RouteComponent() {
   const [markdown, setMarkdown] = React.useState(SAMPLE_INVOICE_MARKDOWN);
   const extractInvoiceFn = useServerFn(extractInvoice);
-  const mutation = useMutation<AiResult>({
-    mutationFn: async () =>
-      (await extractInvoiceFn({ data: { markdown } })) as AiResult,
+  const mutation = useMutation({
+    mutationFn: () => extractInvoiceFn({ data: { markdown } }),
   });
 
   return (
@@ -122,8 +84,8 @@ function RouteComponent() {
         <CardHeader>
           <CardTitle>Run</CardTitle>
           <CardDescription>
-            Uses @cf/meta/llama-3.3-70b-instruct-fp8-fast with json_schema
-            response format via AI Gateway (skipCache, cacheTtl 7d).
+            Uses {INVOICE_EXTRACTION_MODEL} with json_schema response format via
+            AI Gateway (skipCache, cacheTtl 7d).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-4">

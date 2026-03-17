@@ -13,6 +13,69 @@ export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
   InvoiceExtractionScheme,
 ).schema;
 
+export const INVOICE_EXTRACTION_MODEL: keyof AiModels =
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+const decodeAiResponse = Schema.decodeUnknownSync(
+  Schema.Struct({ response: InvoiceExtractionScheme }),
+);
+
+export const runInvoiceExtraction = async ({
+  ai,
+  gatewayId,
+  markdown,
+}: {
+  readonly ai: Ai;
+  readonly gatewayId: string;
+  readonly markdown: string;
+}) => {
+  console.log("[invoice-extraction] starting", {
+    model: INVOICE_EXTRACTION_MODEL,
+    gatewayId,
+    markdownLength: markdown.length,
+  });
+  let raw: unknown;
+  try {
+    raw = await ai.run(
+      INVOICE_EXTRACTION_MODEL,
+      {
+        prompt: `Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.\n\n${markdown}`,
+        response_format: {
+          type: "json_schema" as const,
+          json_schema: InvoiceExtractionJsonSchema,
+        },
+        max_tokens: 256,
+        temperature: 0,
+      },
+      {
+        gateway: {
+          id: gatewayId,
+          skipCache: true,
+          cacheTtl: 7 * 24 * 60 * 60,
+        },
+      },
+    );
+  } catch (error) {
+    console.error("[invoice-extraction] ai.run threw", {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
+  console.log("[invoice-extraction] ai.run returned", JSON.stringify(raw));
+  try {
+    const decoded = decodeAiResponse(raw);
+    console.log("[invoice-extraction] decoded", decoded);
+    return decoded.response;
+  } catch (error) {
+    console.error("[invoice-extraction] decode failed", {
+      raw: JSON.stringify(raw),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+};
+
 export const SAMPLE_INVOICE_MARKDOWN = `# cloudflare-invoice-2026-03-04.pdf
 ## Contents
 ### Page 1
