@@ -38,9 +38,14 @@ export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
 export const INVOICE_EXTRACTION_MODEL: keyof AiModels =
   "@cf/meta/llama-4-scout-17b-16e-instruct";
 
-const decodeAiResponse = Schema.decodeUnknownSync(
-  Schema.Struct({ response: InvoiceExtractionSchema }),
-);
+const AiResponseSchema = Schema.Struct({
+  response: Schema.Union([
+    InvoiceExtractionSchema,
+    Schema.fromJsonString(InvoiceExtractionSchema),
+  ]),
+});
+
+const decodeAiResponse = Schema.decodeUnknownSync(AiResponseSchema);
 
 export const runInvoiceExtraction = async ({
   ai,
