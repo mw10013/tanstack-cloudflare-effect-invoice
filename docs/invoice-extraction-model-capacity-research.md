@@ -2,35 +2,30 @@
 
 ## Question
 
-Are our invoice extraction failures mainly a timeout/infrastructure problem, or are the models themselves not capable enough for this task?
+Can Workers AI extract this invoice into the full schema, including many line items, within practical latency limits?
 
 ## Current setup
 
 Grounded in `src/lib/invoice-extraction.ts`:
 
-- `INVOICE_EXTRACTION_MODEL` is now `@cf/openai/gpt-oss-120b` in `src/lib/invoice-extraction.ts:38` for the next experiment.
-- The schema includes invoice header fields plus `lineItems: Schema.Array(LineItemSchema)` in `src/lib/invoice-extraction.ts:23`.
-- The prompt explicitly says: `For line items, include every line item found.` in `src/lib/invoice-extraction.ts:71`.
-- The code now has two request shapes: classic Workers AI text-generation JSON mode for the previous models, and Responses API structured output for the OSS OpenAI models in `src/lib/invoice-extraction.ts:86` and `src/lib/invoice-extraction.ts:97`.
-- The OSS OpenAI path requests structured output via `text.format = { type: "json_schema", name, schema, strict }` and reads `output_text`, then validates against the same invoice schema in `src/lib/invoice-extraction.ts:98` and `src/lib/invoice-extraction.ts:113`.
-- The output token cap remains `8192`, now via `max_output_tokens`, so the main failures are not explained by the old default token cap.
-- We now have both code paths: binding via `runInvoiceExtraction()` and REST via `runInvoiceExtractionViaGateway()` in `src/lib/invoice-extraction.ts:91` and `src/lib/invoice-extraction.ts:151`.
+- Model: `@cf/openai/gpt-oss-120b`
+- Path under active test: REST via AI Gateway in `runInvoiceExtractionViaGateway()`
+- Cache bypass enabled with `cf-aig-skip-cache: true`
+- Responses API structured output path for OSS OpenAI models
+- Output ceiling for current experiment: `max_output_tokens = 16_384`
+- Schema includes header fields, totals, and `lineItems: Schema.Array(LineItemSchema)`
 
 ## Relevant docs grounding
 
-### Workers AI JSON mode
-
-From `refs/cloudflare-docs/src/content/docs/workers-ai/features/json-mode.mdx:112`:
-
-> This is the list of models that now support JSON Mode
+### Workers AI JSON mode caveat
 
 From `refs/cloudflare-docs/src/content/docs/workers-ai/features/json-mode.mdx:126`:
 
-> Workers AI can't guarantee that the model responds according to the requested JSON Schema. Depending on the complexity of the task and adequacy of the JSON Schema, the model may not be able to satisfy the request in extreme situations. If that's the case, then an error `JSON Mode couldn't be met` is returned and must be handled.
+> Workers AI can't guarantee that the model responds according to the requested JSON Schema.
 
-This matters because a failure in JSON mode is not automatically a timeout. It can mean the model + constrained decoder cannot satisfy the schema.
+This is still useful context for the earlier failures on the classic Workers AI JSON-mode models.
 
-### AI Gateway binding limits
+### Binding limits
 
 From `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai.mdx:118`:
 
@@ -38,284 +33,117 @@ From `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai
 - `skipCache`
 - `cacheTtl`
 
-The binding path does not expose a request-timeout knob. That makes it a poor path for long-running structured extraction experiments.
+The binding path does not expose request-timeout control, which is why REST is the better experiment path right now.
 
-### AI Gateway request timeout
+### Gateway cache bypass
 
-From `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/request-handling.mdx:39`:
+From `refs/cloudflare-docs/src/content/docs/ai-gateway/features/caching.mdx:80`:
 
-> For a Universal Endpoint, configure the timeout value by setting a `requestTimeout` property within the provider-specific `config` object.
+> You can use the header **cf-aig-skip-cache** to bypass the cached version of the request.
 
-And the REST path also supports gateway timeout headers, which is why `runInvoiceExtractionViaGateway()` adds `cf-aig-request-timeout` in `src/lib/invoice-extraction.ts:178`.
+This matters because cached runs made latency look unrealistically good.
 
-### Workers AI OSS OpenAI models
-
-From `refs/cloudflare-docs/src/content/changelog/workers-ai/2025-08-05-openai-open-models.mdx:12`:
-
-> Get started with the new models at `@cf/openai/gpt-oss-120b` and `@cf/openai/gpt-oss-20b`.
+### OSS OpenAI model shape on Workers AI
 
 From `refs/cloudflare-docs/src/content/changelog/workers-ai/2025-08-05-openai-open-models.mdx:17`:
 
 > Workers Binding, it will accept/return Responses API – `env.AI.run("@cf/openai/gpt-oss-120b")`
 
-This is the important nuance: these models are available on Workers AI, but they do not slot into the older `prompt` + `response_format` path exactly the same way. They use Responses API input/output shapes.
+So `gpt-oss-120b` is not just a model-name swap on the old request shape; it uses Responses API semantics.
 
-## Experiments run so far
+## What we tested
 
-## Binding-path results
+### Earlier baseline
 
-| Model | JSON mode support | Full line items | Result | Time |
+Before `gpt-oss-120b`, the main Workers AI models we tried on the full invoice/schema failed in one of these ways:
+
+- timeout
+- `JSON Mode couldn't be met`
+- malformed JSON on non-official JSON-mode models
+
+That established the original problem: one-shot structured extraction with many line items was not working reliably on the earlier model paths.
+
+### `@cf/openai/gpt-oss-120b` via REST + AI Gateway
+
+Key runs seen in `logs/server.log`:
+
+| Run | Cache | Result | Time | Notes |
 |---|---|---|---|---|
-| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | official | no | success | ~31s |
-| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | official | yes | timeout (`3046` seen in gateway) | ~60s on binding path |
-| `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` | official | yes | `5024 JSON Mode couldn't be met` | binding path masked this badly |
-| `@cf/qwen/qwen3-30b-a3b-fp8` | not official | yes | timeout | ~60s |
-| `@cf/meta/llama-4-scout-17b-16e-instruct` | not official | yes | malformed JSON string | fast |
+| 1 | likely uncached | decode failure | ~67.9s | local decode bug + malformed output |
+| 2 | likely cached | success | ~0.5s | not useful for latency judgment |
+| 3 | uncached | decode failure | ~73.5s | truncated at `max_output_tokens = 8192` |
+| 4 | uncached | success | ~57.6s | after raising `max_output_tokens` to `16_384` |
+| 5 | uncached | success | ~57.9s | second successful uncached run |
 
-## REST-path results
+Grounding from the latest log entries:
 
-Using `runInvoiceExtractionViaGateway()` improved observability:
-
-- With a 120s gateway timeout, the request actually ran for about 120s and returned `2014: Provider request timeout`.
-- With a 300s gateway timeout, llama still failed at about 120s with `3046: Request timeout`.
-- DeepSeek R1 ran for about `544,143ms` and then returned `5024: JSON Mode couldn't be met`.
-
-Key implication: increasing the gateway timeout helps us observe the true provider behavior, but it does not remove Workers AI's internal limits.
-
-## Current experiment in code
-
-The code is now set up to test the stronger OSS OpenAI Workers AI model directly:
-
-- model: `@cf/openai/gpt-oss-120b`
-- transport: same `env.AI.run(...)` / Workers AI path
-- request shape: Responses API, not classic text-generation JSON mode
-- structured output request: `text.format.type = "json_schema"`
-- decoder path: `output_text` -> invoice schema validation
-
-Why this is a good next experiment:
-
-- keeps the provider as Workers AI
-- changes the model family and API surface together, as Cloudflare intends for these models
-- avoids the mistaken assumption that `gpt-oss-120b` can be tested by only swapping the old model name under the old request shape
-
-## Latest server-log result
-
-We now have four distinct `@cf/openai/gpt-oss-120b` results in `logs/server.log`.
-
-### Run 1 - fast provider response, local decode failure
-
-- request path: gateway REST API against Workers AI
-- model: `@cf/openai/gpt-oss-120b`
-- elapsed time: `67,879ms`
-- result: response returned successfully from the provider
-- failure point: local decode/validation, not provider timeout
-
-What came back:
-
-- The model returned a full Responses API payload under `result`, not a top-level `output_text` field.
-- The response included long reasoning output plus a final assistant message containing JSON text.
-- The generated JSON was not valid for our schema as-is.
-
-Concrete evidence from the log:
-
-- Our decoder failed with `Missing key at ["output_text"]`.
-- The assistant message text contained malformed JSON: after `"amount": "$0.00"` the payload had an extra comma/newline before `"period"`.
-
-Takeaway from run 1:
-
-- not a timeout problem
-- partly our decode bug
-- partly malformed model output
-
-### Run 2 - decode fix landed, successful extraction
-
-After fixing the local Responses decoder to unwrap `result.output[*].content[*].text`, the next run succeeded.
-
-Grounding from `logs/server.log`:
-
-- server-fn request at `logs/server.log:22`
-- gateway returned in `elapsedMs: 536` at `logs/server.log:32`
-- decoded invoice object logged at `logs/server.log:36`
-
-What this means:
-
-- The latest run was extremely fast, around half a second through the gateway path.
-- The decode-path bug was real and materially blocked the earlier experiment.
-- At least on this successful run, `@cf/openai/gpt-oss-120b` produced output that decoded into our full invoice schema, including many line items and totals.
-
-Important caution:
-
-- The AI Gateway dashboard suggests this successful run was likely served from cache.
-- That means `~536ms` is not a trustworthy uncached model-latency number.
-- We have not yet proven this is consistently reliable across repeated runs.
-- The earlier malformed-output run still matters. Current evidence is now mixed but much more promising.
-
-### Cache caveat
-
-The first meaningful uncached-looking `gpt-oss-120b` run took about `67,879ms`, while later very fast runs appear to be cache hits.
-
-From Cloudflare's AI Gateway caching docs in `refs/cloudflare-docs/src/content/docs/ai-gateway/features/caching.mdx:80`:
-
-> You can use the header **cf-aig-skip-cache** to bypass the cached version of the request.
-
-So for further latency research, the REST path should explicitly send `cf-aig-skip-cache: true`. Without that, dashboard timings and UI timings are too easy to misread.
-
-### Run 3 - uncached decode failure from truncation
-
-The latest uncached run failed again, but with a more specific signal.
-
-Grounding from `logs/server.log`:
-
-- request started with `skipCache: true`
-- gateway returned in `elapsedMs: 73,533`
-- payload included `incomplete_details: { reason: "max_output_tokens" }`
-- local decode failed with `SyntaxError: Unterminated string in JSON at position 10434`
-
-What this means:
-
-- this was not a timeout failure
-- this was not a cache-hit result
-- the model output was truncated because it hit the `max_output_tokens` ceiling
-- the truncation cut the JSON mid-string, so decode failed exactly as expected
-
-This is a better explanation than generic unreliability for this run: the response was incomplete, not merely malformed.
-
-### Run 4 - uncached success after raising `max_output_tokens`
-
-After increasing the Responses API ceiling from `8192` to `16,384`, the next uncached run succeeded.
-
-Grounding from `logs/server.log`:
-
-- request started with `skipCache: true` at `logs/server.log:57`
-- gateway returned in `elapsedMs: 57,632` at `logs/server.log:62`
-- payload had `incomplete_details: null` at `logs/server.log:63`
-- decoded invoice object logged at `logs/server.log:66`
-
-What this means:
-
-- the earlier truncation diagnosis was likely correct
-- increasing `max_output_tokens` was enough, at least for this invoice/run, to avoid incomplete output
-- the model can now produce a full schema-valid extraction on an uncached run in under a minute
+- uncached success at `elapsedMs: 57,632` in `logs/server.log:62`
+- another uncached success at `elapsedMs: 57,916` in `logs/server.log:465`
+- both logged decoded invoice objects at `logs/server.log:66` and `logs/server.log:469`
 
 ## Findings
 
-### 1. This does not look like just an underpowered-model problem
+### 1. `gpt-oss-120b` is the first Workers AI path here that looks genuinely viable
 
-- A 70B official JSON-mode model still times out on the full schema.
-- A 32B reasoning model can run for 9+ minutes and still fail schema satisfaction.
-- Faster non-official models are not a clean comparison because they appear not to do constrained decoding reliably.
-- `@cf/openai/gpt-oss-120b` has now shown four relevant behaviors: one uncached-looking ~68s run, one cached-looking very fast successful decode, one uncached ~73.5s run truncated by `max_output_tokens`, and one uncached successful run at ~57.6s after raising the token ceiling.
+- It can return the full schema for this invoice.
+- It has now succeeded on multiple uncached runs.
+- The uncached latency is roughly high-50s seconds, not sub-second.
 
-If this were only about model size, the 70B official model would be more convincing than it currently is. Instead, the results point to a harder interaction between model capability, constrained decoding, large array-of-object output, and noisy markdown input.
+That is a big improvement over the earlier models, which mostly failed outright on the same task shape.
 
-### 2. The task shape is probably too expensive for one-shot constrained decoding on Workers AI
+### 2. Output length was a real bottleneck
 
-The current request asks for all of these at once:
+One uncached failure included:
 
-- classify whether it is an invoice
-- extract header metadata
-- extract addresses
-- extract totals
-- emit every line item as an array of objects
+- `incomplete_details: { reason: "max_output_tokens" }`
+- a truncated JSON string that failed to parse
 
-For this invoice, the line-item section is the expensive part. Header-only extraction already succeeds. Full extraction with `lineItems` is where the system breaks down.
+After raising the ceiling from `8192` to `16_384`, the next uncached runs succeeded. That strongly suggests truncation, not only model unreliability, caused at least one failure mode.
 
-### 3. The real bottleneck is likely schema complexity plus constrained decoding, not `max_tokens`
+### 3. REST is still the right place to experiment
 
-`max_tokens` is already `8192` in `src/lib/invoice-extraction.ts:87`.
+REST gives us:
 
-The stronger signal is Cloudflare's own JSON mode warning that the model may not be able to satisfy the requested schema in extreme situations in `refs/cloudflare-docs/src/content/docs/workers-ai/features/json-mode.mdx:126`.
+- structured provider responses
+- explicit uncached requests
+- timeout control via gateway headers
 
-### 4. REST is the right experimentation path
+That makes the results much easier to interpret than the binding path.
 
-The binding path collapses too much useful error detail. The REST path gives us structured provider errors and request IDs, and lets us force uncached requests with `cf-aig-skip-cache`, which makes the next experiments much more interpretable.
+### 4. We still do not have clean evidence that binding is safe
 
-### 5. `@cf/openai/gpt-oss-120b` changes the shape of the problem
+The best uncached runs are about `57.6s` and `57.9s`.
 
-The new experiment suggests a different failure profile:
-
-- not the old upstream timeout wall
-- not the explicit `JSON Mode couldn't be met` path we saw with DeepSeek
-- instead, a mix of cache-inflated fast successes, uncached long responses, and incomplete output when the model hits `max_output_tokens`
-
-That is meaningful. It suggests this model family may avoid the worst constrained-decoding timeout behavior, and that output length is a concrete bottleneck we can partially address.
+That is encouraging, but it is too close to the rough timeout boundary we were worried about earlier to assume the binding path will be reliable. Binding is still worth testing for one data point, but it is not yet the safer default.
 
 ## Assessment
 
-My read today:
+Current read:
 
-- The evidence does not support a simple conclusion of `the models are underpowered`.
-- The evidence does support `Workers AI JSON mode struggles with this specific one-shot extraction shape`.
-- Model capability is still part of the story, but the bigger issue seems to be structured-output reliability under a large schema with many line items.
-- `@cf/openai/gpt-oss-120b` now adds a new nuance: stronger/faster models may avoid timeout and can succeed, but output correctness may still vary run to run.
-- For uncached `gpt-oss-120b` runs, output length is now clearly one of the main constraints.
-- Raising `max_output_tokens` improved the outcome on the latest uncached run, which is strong evidence that truncation was a real and fixable part of the problem.
+- The problem was not just `underpowered models`.
+- The earlier Workers AI model paths were a poor fit for this extraction shape.
+- `@cf/openai/gpt-oss-120b` is materially better.
+- For this invoice, REST + `gpt-oss-120b` now looks workable.
+- The main remaining questions are consistency across more runs and how it behaves on larger invoices.
 
-So far the strongest updated read is:
+On binding specifically:
 
-- older Workers AI JSON-mode path: often too slow or cannot satisfy the schema
-- `gpt-oss-120b` Responses path: promising, and now demonstrably capable of decoding into the full schema on both cached and uncached runs
-- remaining questions: consistency and the right `max_output_tokens` ceiling for larger invoices
+- Is it feasible to test? Yes.
+- Would I switch immediately based on current evidence? No.
+- Why not? Because uncached runs are landing right around the danger zone. A binding experiment is worth doing as a measurement, not as the new default path yet.
 
-## Recommended next experiments
+## Recommendation
 
-### A. Best next experiment: Workers AI `@cf/openai/gpt-oss-120b`
+Short term:
 
-This is now the active experiment.
+1. keep REST as the experiment/default path
+2. run one binding experiment with the same model and payload for a clean data point
+3. if binding fails or is flaky, keep REST and move on
 
-Why:
+If the goal is practical reliability today, REST is the better choice.
 
-- strongest of the two OSS OpenAI models on Workers AI
-- tests whether a different model family on the same provider performs better
-- keeps the rest of the system mostly unchanged apart from the request/response shape Cloudflare requires for this model family
-- can now be measured more cleanly through REST with explicit cache bypass
+## Notable quality caveat
 
-What we want to learn:
+The latest decoded output still deserves spot-checking.
 
-- does `gpt-oss-120b` keep returning valid schema-conforming JSON for the full invoice across repeated runs?
-- is its uncached latency consistently acceptable? Current grounded uncached results are roughly `57.6s` to `73.5s`.
-- when it fails, does it fail as truncation, malformed JSON, schema drift, or extraction-quality error?
-
-Immediate follow-up if it fails:
-
-- run the same extraction several more times with REST + `cf-aig-skip-cache: true`
-- compare decoded outputs for stability and completeness
-- if failures recur, capture whether they are `max_output_tokens` truncation, malformed JSON, or content-quality misses
-- if truncation recurs, test whether `16,384` is enough or whether schema reduction is a better fix than further token increases
-- then try header-only extraction
-- compare full schema vs line-items-only schema
-
-### B. Isolate the expensive part on Workers AI
-
-Before declaring Workers AI unworkable, split the current task into smaller experiments:
-
-1. header/totals only schema
-2. line-items only schema
-3. line-items only, but limited to a single page or chunk
-4. line-items only, but only non-zero amount items
-
-If header extraction keeps succeeding and line-items-only keeps failing, we will have much cleaner evidence that arrays of objects are the real break point.
-
-### C. Compare structured Responses API vs free-form JSON text
-
-Try the same Workers AI model without constrained decoding:
-
-- prompt for JSON text
-- parse + validate after the fact
-
-If this succeeds much faster, that strongly suggests structured decoding is the main bottleneck, not raw comprehension.
-
-## Working hypothesis
-
-Current best hypothesis:
-
-The limiting factor is not simply model size. It is the combination of:
-
-- noisy markdown converted from PDF
-- a large output schema
-- many `lineItems` as array-of-object output
-- constrained JSON decoding on Workers AI
-
-`@cf/openai/gpt-oss-120b` is worth testing next because it can answer the most important question quickly:
-
-Is the task itself too large, or were the earlier failures mainly a limitation of the earlier Workers AI model paths we tested?
+From the recent log, the model appears to duplicate `Workers Paid` in one successful run, once with `$0.00` and once with `$5.00`. So we now have basic viability, but not yet proof of extraction correctness at the line-item level.
