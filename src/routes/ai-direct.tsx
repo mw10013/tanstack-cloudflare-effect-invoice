@@ -82,7 +82,7 @@ function RouteComponent() {
         </p>
       </header>
 
-      <Card className="flex min-h-0 flex-1 flex-col">
+      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <CardHeader>
           <CardTitle>Run</CardTitle>
           <CardDescription>
@@ -90,7 +90,7 @@ function RouteComponent() {
             AI Gateway (skipCache, cacheTtl 7d).
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
           <Textarea
             value={markdown}
             onChange={(event) => {
@@ -109,7 +109,7 @@ function RouteComponent() {
             </Button>
           </div>
           {mutation.data && (
-            <div className="flex flex-col gap-2">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
               <p className="text-sm text-muted-foreground">
                 {mutation.data.model} - {mutation.data.elapsedMs}ms
               </p>
@@ -117,7 +117,7 @@ function RouteComponent() {
                 <p className="text-sm text-destructive">{mutation.data.error}</p>
               )}
               {mutation.data.ok && (
-                <pre className="overflow-auto rounded-md border bg-muted/30 p-3 text-sm leading-5 whitespace-pre-wrap">
+                <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted/30 p-3 text-sm leading-5 whitespace-pre-wrap break-words">
                   {JSON.stringify(mutation.data.parsed, null, 2)}
                 </pre>
               )}
