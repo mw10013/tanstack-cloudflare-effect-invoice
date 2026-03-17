@@ -1,6 +1,6 @@
 # Invoice Extraction Schema Research
 
-Question: What should `InvoiceExtractionSchema` look like to capture structured data from invoice markdown, and should optional fields use `Schema.NullOr` or `Schema.optionalKey`/`Schema.optional`?
+Question: What should `InvoiceExtractionSchema` look like to capture structured data from invoice markdown?
 
 ## Invoice Markdown Structure Analysis
 
@@ -74,43 +74,11 @@ Other invoices will likely differ in:
 - Billing period format
 - Whether subtotal, tax, total are all present
 
-## NullOr vs optionalKey vs optional — Research
+## Optionality Approach: Schema.NullOr
 
-### Effect v4 Primitives
+All optional fields use `Schema.NullOr`. This puts every key in `required` in the generated JSON Schema, so the LLM always emits the key with either a value or `null`. Predictable, consistent output shape. Matches the codebase convention in `src/lib/Domain.ts` for nullable-but-always-present fields.
 
-From `refs/effect4/packages/effect/SCHEMA.md:331–397`:
-
-| Primitive | TS Type | Key present? | Allows undefined? |
-|---|---|---|---|
-| `Schema.optionalKey(S)` | `readonly a?: T` | key can be absent | no (exactOptionalPropertyTypes) |
-| `Schema.optional(S)` | `readonly a?: T \| undefined` | key can be absent | yes |
-| `Schema.NullOr(S)` | `readonly a: T \| null` | key **always present** | no, but allows null |
-
-### JSON Schema Output — Critical Difference
-
-From `refs/effect4/packages/effect/SCHEMA.md:4702–4771`:
-
-**`Schema.optionalKey(Schema.String)`** →
-```json
-{
-  "type": "object",
-  "properties": { "a": { "type": "string" } },
-  "additionalProperties": false
-}
-```
-Property is NOT in `required`. Key may be absent from JSON.
-
-**`Schema.optional(Schema.String)`** → (`undefined` → `null` in JSON)
-```json
-{
-  "type": "object",
-  "properties": { "a": { "anyOf": [{ "type": "string" }, { "type": "null" }] } },
-  "additionalProperties": false
-}
-```
-Property is NOT in `required`. Uses `anyOf` with `null` type.
-
-**`Schema.NullOr(Schema.String)`** (required key) →
+From `refs/effect4/packages/effect/SCHEMA.md:4702–4771`, `Schema.NullOr(Schema.String)` produces:
 ```json
 {
   "type": "object",
@@ -119,42 +87,6 @@ Property is NOT in `required`. Uses `anyOf` with `null` type.
   "additionalProperties": false
 }
 ```
-Property IS in `required`. LLM **must** emit the key (with value `string | null`).
-
-### Existing Codebase Patterns
-
-**Domain entities** (`src/lib/Domain.ts:88–135`) — use `Schema.NullOr` for DB columns that are nullable but always present:
-```ts
-image: Schema.NullOr(Schema.String),
-banReason: Schema.NullOr(Schema.String),
-```
-
-**External API responses** (`src/lib/google-client.ts:40–70`) — use `Schema.optionalKey` for API fields that may be absent:
-```ts
-modifiedTime: Schema.optionalKey(Schema.String),
-webViewLink: Schema.optionalKey(Schema.String),
-```
-
-**R2 metadata** (`src/worker.ts:173–179`) — use `Schema.optionalKey` for metadata fields that may not exist:
-```ts
-fileName: Schema.optionalKey(Schema.NonEmptyString),
-contentType: Schema.optionalKey(Schema.NonEmptyString),
-```
-
-### Recommendation: NullOr for LLM-constrained JSON output
-
-**Use `Schema.NullOr`** for optional fields in `InvoiceExtractionSchema`. Rationale:
-
-1. **LLM JSON Schema constraint** — Workers AI `json_schema` mode uses constrained decoding. The schema tells the LLM exactly what to produce. With `NullOr`, every key is in `required` → the LLM always emits the key → the response shape is predictable and consistent. With `optionalKey`, the key is NOT in `required` → the LLM may or may not emit it → unpredictable.
-
-2. **No `anyOf` ambiguity for `optionalKey`** — `optionalKey` produces `{ "type": "string" }` (no null, no required). The LLM doesn't know if it should emit the key or not. `NullOr` produces `{ "anyOf": [{"type":"string"},{"type":"null"}], required }` which is explicit: emit the key, use null if absent.
-
-3. **Codebase convention for "might not have a value"** — Domain.ts consistently uses `NullOr` for nullable columns. Invoice extraction fields follow the same pattern: they represent data that may or may not be present in the source document.
-
-4. **Previous research agrees** — From `docs/invoice-json-extraction-research.md:317`:
-   > Using `NullOr` instead of `optional` because the LLM should always return the key (just set to `null` if not found). This produces cleaner JSON Schema with no `anyOf`/`oneOf` complexity that could confuse the model.
-
-**Exception**: `optionalKey` is correct for external API responses where the key itself may be absent from the payload (Google API, R2 metadata). LLM output is different — we control the schema, and forcing all keys to be present is better.
 
 ## Proposed InvoiceExtractionSchema
 
@@ -238,12 +170,40 @@ The proposed schema is moderately complex (nested structs, array of structs). If
 - Flatten `vendor`/`billTo` to top-level fields like `vendorName`, `billToName`
 - Reduce to just header fields + totals
 
-### Prompt Should Match Schema
+## Extraction Prompt
 
-The extraction prompt needs updating to match the expanded schema. Current prompt:
+Current prompt (too narrow for expanded schema):
 ```
-Determine whether the following markdown is an invoice and extract only the total if present.
+Determine whether the following markdown is an invoice and extract only the total if present. Reply with JSON only.
 ```
 
-New prompt should instruct the LLM to populate all fields, use null for missing data, keep amounts as strings with original formatting.
+### New Prompt
+
+```
+You are an invoice data extraction assistant. You will receive markdown converted from a PDF document.
+
+Analyze the document and extract structured invoice data according to the provided JSON schema.
+
+Rules:
+- Set isInvoice to true only if the document is clearly an invoice.
+- If isInvoice is false, set all other fields to null.
+- Extract only information explicitly present in the document. Never infer or guess values.
+- Set fields to null when the information is not found in the document.
+- Keep amounts as strings exactly as they appear in the document, including currency symbols (e.g., "$5.39", "$0.011 per 1,000").
+- Keep dates as strings in whatever format appears in the document.
+- For line items, include every line item found. Set quantity, unitPrice, or amount to null if not clearly stated for that item.
+- For addresses, extract whatever address components are present. Set missing components to null.
+
+Document:
+
+{markdown}
+```
+
+### Prompt Design Rationale
+
+- **Explicit null instruction** — prevents hallucination of missing fields
+- **Amounts as strings** — avoids LLM numeric parsing errors on formatted currency (`"$1,234.56"`)
+- **No few-shot examples** — the JSON Schema already constrains the output shape; adds token cost without clear benefit. Revisit if extraction quality is poor.
+- **"Never infer or guess"** — LLMs tend to fill in plausible-looking data. This instruction reduces hallucination.
+- **Single prompt (not messages array)** — current code uses `prompt` parameter, not `messages`. Both work with `response_format` per `docs/workers-ai-json-response-research.md:46`.
 
