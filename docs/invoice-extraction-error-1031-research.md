@@ -145,43 +145,81 @@ Replaced all `NullOr(String)` with `String`. Missing values become empty string 
 
 Added back `lineItems: Schema.Array(LineItemSchema)` with all-String fields. Got `504 Gateway Time-out` (not 1031). The model is trying to generate ~40 line items with constrained decoding and exceeds Cloudflare's upstream timeout. This is the same class of issue as #12398 — large structured output overwhelms the internal token/time budget.
 
-### Step 6: Try Llama 4 Scout with lineItems — IN PROGRESS
+### Step 6: Try Llama 4 Scout with lineItems — DONE, response returned but two issues
 
-Scout is MoE with 17B active params (vs 70B dense) so generates faster. May complete within the timeout window.
+Scout completed the request (no timeout!) and extracted all ~40 line items with good data quality. But two problems:
 
-Original Step 2 proposed schema (for reference):
+1. **`response` is a JSON string, not a parsed object.** Llama-3.3-70b returns `{"response": {…object…}}` but Scout returns `{"response": "{…json string…}"}`. This is a known model-specific behavior — Scout is not on the official JSON Mode supported list (`json-mode.mdx:114-123`), and its `response_format` support appears to work differently. The decode fails because Effect Schema expects an object, gets a string.
 
-Remove nested structs but keep all fields:
+2. **Malformed JSON in the string.** Every line item has a misplaced comma — the closing `}` for each object is missing before the comma+period field:
+   ```json
+   "amount": "$0.00"
+   ,
+   "period": "Feb 4–Mar 3, 2026"
+   ```
+   Should be: `"amount": "$0.00", "period": "..."`. This means Scout's JSON mode is not doing proper constrained decoding for arrays of objects — it generates syntactically invalid JSON.
 
-```ts
-const InvoiceExtractionSchema = Schema.Struct({
-  isInvoice: Schema.Boolean,
-  invoiceNumber: Schema.NullOr(Schema.String),
-  invoiceDate: Schema.NullOr(Schema.String),
-  dueDate: Schema.NullOr(Schema.String),
-  currency: Schema.NullOr(Schema.String),
-  vendorName: Schema.NullOr(Schema.String),
-  vendorEmail: Schema.NullOr(Schema.String),
-  vendorAddress: Schema.NullOr(Schema.String),
-  billToName: Schema.NullOr(Schema.String),
-  billToEmail: Schema.NullOr(Schema.String),
-  billToAddress: Schema.NullOr(Schema.String),
-  subtotal: Schema.NullOr(Schema.String),
-  tax: Schema.NullOr(Schema.String),
-  total: Schema.NullOr(Schema.String),
-  amountDue: Schema.NullOr(Schema.String),
-  lineItems: Schema.NullOr(Schema.Array(LineItemSchema)),
-})
-```
+**Scout is fast enough but its JSON mode is broken for complex schemas.** The response_format API exists but doesn't enforce valid JSON structure like llama-3.3-70b does.
 
-This eliminates nested `anyOf` for addresses (no more `NullOr(AddressSchema)`) while keeping all data. The addresses become single concatenated strings.
+## Revised Assessment (after all experiments)
 
-### Step 3: If arrays of objects also fail — extract line items separately
+### Model Comparison
 
-Keep a flat schema without `lineItems` for the first pass. Do a second pass with a simple schema to extract line items. Or extract line items as a JSON string field that we parse separately.
+| | Llama 3.3 70B | Llama 4 Scout |
+|---|---|---|
+| Architecture | Dense 70B (fp8) | MoE 109B total / 17B active |
+| Context | 24K tokens | 131K tokens |
+| Pricing | $0.293/$2.253 per M | $0.27/$0.85 per M |
+| JSON Mode | Official support, constrained decoding | Has `response_format` API but NOT on official JSON Mode list |
+| Response format | `response` = parsed object | `response` = JSON string (must JSON.parse) |
+| JSON validity | Valid JSON (constrained decoding works) | **Malformed JSON** for complex schemas (arrays of objects) |
+| Speed | Slower (70B dense) — 504 timeout on ~40 line items | Faster (17B active MoE) — completes within timeout |
+| Created | 2024-12-06 | 2025-04-05 |
 
-Line items are critical. They should not be dropped. But they may need to be extracted in a separate call if the model can't handle the full schema.
+### The Core Problem
 
-### Step 4: Consider AI Gateway URL path with external model
+**Llama 3.3 70B** produces valid JSON via constrained decoding but is too slow for large structured output (~40 line items), causing 504 Gateway Time-out.
 
-If Workers AI models fundamentally can't handle this, route through AI Gateway to an external provider (OpenAI, Anthropic) via the URL path. The gateway supports this. But this adds complexity and cost, and should be a last resort.
+**Llama 4 Scout** is fast enough but produces invalid JSON — its `response_format` support is incomplete (returns string instead of object, generates malformed JSON for arrays of objects).
+
+### AI Gateway Timeout Research
+
+From `refs/cloudflare-docs/src/content/docs/ai-gateway/`:
+
+- AI Gateway supports configurable timeouts via `requestTimeout` (ms) in Universal Endpoint config, or `cf-aig-request-timeout` header for direct provider requests
+- Dynamic Routing supports a `timeout` property (ms) per Model element
+- **But the `ai.run()` binding gateway option only supports `id`, `skipCache`, `cacheTtl`** — no timeout parameter
+- Workers AI error code 3007 = timeout (HTTP 408), but our 504 comes from the gateway/infrastructure layer
+- No way to increase the timeout through the binding's gateway config — would need to use the REST API or Universal Endpoint instead
+
+**Key refs:**
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/request-handling.mdx` — timeout config
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/features/dynamic-routing/json-configuration.mdx` — dynamic routing timeout
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/workersai.mdx:118-125` — binding gateway options (no timeout)
+
+### Recommended Path Forward
+
+#### Option A: Llama 3.3 70B + reduce output size
+
+Stay with llama-3.3-70b (reliable constrained decoding). Reduce the number of line items to avoid the 504 timeout:
+- Prompt: "Extract only line items with non-zero amounts" (cuts ~40 items to ~3 for this invoice)
+- Or cap: "Extract up to 15 line items, prioritizing those with non-zero amounts"
+- Trade-off: Loses zero-amount line items. May be acceptable since they carry no financial value.
+
+#### Option B: Llama 4 Scout + fix decode + repair JSON
+
+Use Scout for speed. Fix the two issues in code:
+1. Handle string response: `typeof raw.response === "string" ? JSON.parse(raw.response) : raw.response`
+2. Attempt JSON repair on malformed output (e.g., regex fix for misplaced commas, or use a lenient JSON parser)
+- Trade-off: Fragile. JSON repair is heuristic — may break on different invoice formats. The malformed comma pattern may not be consistent.
+
+#### Option C: Two-pass extraction
+
+Pass 1: Llama 3.3 70B extracts header fields (no lineItems) — already proven to work.
+Pass 2: Separate call to extract line items only, with a simpler schema.
+- Trade-off: Two API calls, more latency and cost. But each call is within timeout limits.
+
+#### Option D: Workers AI REST API with AI Gateway timeout
+
+Instead of the `ai.run()` binding, call Workers AI via the REST API through AI Gateway with a custom `requestTimeout`. This lets llama-3.3-70b complete the full extraction without the default timeout killing it.
+- Trade-off: More complex code (HTTP client instead of binding), need to manage API tokens. But preserves reliable constrained decoding.
