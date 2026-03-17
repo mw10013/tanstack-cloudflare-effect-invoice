@@ -31,6 +31,10 @@ export const decodeInvoiceExtraction = Schema.decodeUnknownSync(
   InvoiceExtractionSchema,
 );
 
+const decodeInvoiceExtractionFromJsonString = Schema.decodeUnknownSync(
+  Schema.fromJsonString(InvoiceExtractionSchema),
+);
+
 export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
   InvoiceExtractionSchema,
 ).schema;
@@ -54,7 +58,34 @@ const ResponsesApiTextSchema = Schema.Struct({
   output_text: Schema.String,
 });
 
-const decodeResponsesApiText = Schema.decodeUnknownSync(ResponsesApiTextSchema);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const extractResponsesApiPayload = (raw: unknown) =>
+  isRecord(raw) && "result" in raw ? raw.result : raw;
+
+const extractResponsesApiOutputText = (raw: unknown): string => {
+  const payload = extractResponsesApiPayload(raw);
+  const direct = Schema.decodeUnknownOption(ResponsesApiTextSchema)(payload);
+  if (direct._tag === "Some") return direct.value.output_text;
+  if (!isRecord(payload) || !Array.isArray(payload.output)) {
+    throw new Error("Responses API payload missing output_text");
+  }
+  for (const item of payload.output) {
+    if (isRecord(item) && item.type === "message" && Array.isArray(item.content)) {
+      for (const content of item.content) {
+        if (
+          isRecord(content) &&
+          content.type === "output_text" &&
+          typeof content.text === "string"
+        ) {
+          return content.text;
+        }
+      }
+    }
+  }
+  throw new Error("Responses API message output_text not found");
+};
 
 const AiGatewayErrorSchema = Schema.Struct({
   name: Schema.String,
@@ -118,7 +149,9 @@ const buildRequestBody = (markdown: string) =>
 
 const decodeInvoiceExtractionResponse = (raw: unknown) => {
   if (isResponsesApiModel(INVOICE_EXTRACTION_MODEL)) {
-    return decodeInvoiceExtraction(decodeResponsesApiText(raw).output_text);
+    return decodeInvoiceExtractionFromJsonString(
+      extractResponsesApiOutputText(raw),
+    );
   }
   return decodeAiResponse(raw).response;
 };
