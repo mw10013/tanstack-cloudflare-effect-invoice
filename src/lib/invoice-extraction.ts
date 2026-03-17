@@ -125,6 +125,8 @@ const buildTextGenerationRequestBody = (markdown: string) => ({
   temperature: 0,
 });
 
+const MAX_OUTPUT_TOKENS = 16_384;
+
 const buildResponsesApiRequestBody = (markdown: string): ResponsesInput => ({
   input: buildPrompt(markdown),
   text: {
@@ -135,7 +137,7 @@ const buildResponsesApiRequestBody = (markdown: string): ResponsesInput => ({
       strict: true,
     },
   },
-  max_output_tokens: 8192,
+  max_output_tokens: MAX_OUTPUT_TOKENS,
   reasoning: {
     effort: "medium",
   },
