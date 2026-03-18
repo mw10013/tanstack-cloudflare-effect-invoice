@@ -1,94 +1,142 @@
-# Research: Invoice Extraction via Gemini Flash & Cloudflare AI Gateway (2026)
+# Research: Invoice Extraction via Gemini Flash & Cloudflare AI Gateway
 
-## 1. Core Architecture Overview
-For an indie developer, the most efficient stack for document processing combines the visual reasoning of Gemini Flash with the observability of Cloudflare.
+## 1. Core Architecture
 
-*   **Model Provider:** Google AI Studio (Gemini 2.5/3.0 Flash).
-*   **Proxy Layer:** Cloudflare AI Gateway.
-*   **Execution Layer:** Cloudflare Workers (handling file uploads and schema validation).
+Use Gemini Flash as the vision+extraction model instead of Workers AI models (which are too small for accurate invoice OCR). Route through the existing Cloudflare AI Gateway for logging, caching, analytics.
 
-## 2. Model Selection: Gemini 2.5 Flash
-As of 2026, **Gemini 2.5 Flash** is the primary recommendation for document extraction:
-*   **Multimodal Intelligence:** It "sees" the layout of the PDF/Image, identifying totals and line items even in complex or non-standard layouts.
-*   **Cost Efficiency:** Priced at approximately **$0.10 per 1M tokens**, making it highly sustainable for indie budgets.
-*   **Structured Output:** Supports native JSON schema enforcement, ensuring the model's response matches your application's data types exactly.
+- **Model Provider:** Google AI Studio (Gemini 2.5 Flash)
+- **Proxy Layer:** Cloudflare AI Gateway (already set up in this project)
+- **Execution Layer:** Cloudflare Workers
 
-## 3. Cloudflare AI Gateway Configuration
-The AI Gateway acts as a specialized proxy that provides logs, caching, and analytics for your AI requests.
+## 2. Model: Gemini 2.5 Flash
+
+- **Multimodal:** Accepts images and PDFs directly — no separate OCR step needed. The model reads the document visually and extracts structured data in one call.
+- **Structured Output:** Native JSON schema enforcement via `responseMimeType: "application/json"` + `responseSchema`.
+- **Cost:** ~$0.10/M input tokens, ~$0.40/M output tokens (verify current pricing at [ai.google.dev](https://ai.google.dev/pricing)).
+- **Rate Limits (Paid Tier):** 2,000 RPM.
+- **Privacy:** Paid tier data is not used for training.
+
+This replaces the current two-step pipeline (PDF → `toMarkdown` → `gpt-oss-120b`) with a single model call that can handle both PDFs and images.
+
+## 3. AI Gateway Configuration
 
 ### URL Structure
-To route requests through the gateway, use the following endpoint format:
-`https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_NAME}/google-ai-studio/v1beta/models/gemini-2.5-flash:generateContent`
 
-### Authentication
-Unlike enterprise-grade Google Cloud services, **Google AI Studio** uses a simple API Key. This key is passed to the Cloudflare Gateway as a query parameter:
-`?key=YOUR_GOOGLE_AI_STUDIO_KEY`
+Per Cloudflare docs (`refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/google-ai-studio.mdx`):
 
-### Gateway Benefits
-1.  **Request Logging:** Inspect every invoice extraction attempt to debug edge cases.
-2.  **Caching:** Automatically serve identical requests from the edge, reducing API costs and latency.
-3.  **Cost Tracking:** Monitor token usage and spend in real-time within the Cloudflare dashboard.
-
-## 4. Implementation with Effect Schema
-Using **Effect (v4)** schemas ensures that the extraction is type-safe and consistent.
-
-### The Extraction Schema
-```typescript
-import { Schema, JSONSchema } from "@effect/schema";
-
-const LineItemSchema = Schema.Struct({
-  description: Schema.String,
-  quantity: Schema.String,
-  unitPrice: Schema.String,
-  amount: Schema.String,
-  period: Schema.String,
-});
-
-export const InvoiceExtractionSchema = Schema.Struct({
-  isInvoice: Schema.Boolean,
-  invoiceNumber: Schema.String,
-  invoiceDate: Schema.String,
-  dueDate: Schema.String,
-  currency: Schema.String,
-  vendorName: Schema.String,
-  lineItems: Schema.Array(LineItemSchema),
-  total: Schema.String,
-});
-
-// Convert to OpenAPI for Gemini
-const responseSchema = JSONSchema.make(InvoiceExtractionSchema);
+```
+https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/google-ai-studio/v1/models/gemini-2.5-flash:generateContent
 ```
 
-### Request Logic (Cloudflare Worker)
-In your Worker, you send the file (Base64) and the schema to the Gateway:
-```typescript
-const response = await fetch(`${gatewayUrl}?key=${env.API_KEY}`, {
-  method: "POST",
-  body: JSON.stringify({
-    contents: [{
-      parts: [
-        { text: "Extract invoice data according to the provided schema." },
-        { inlineData: { mimeType: "application/pdf", data: base64File } }
-      ]
-    }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: responseSchema // The Effect-generated schema
-    }
-  })
-});
+The gateway recognizes `google-ai-studio` as a provider slug in the URL path. No additional provider configuration needed on the dashboard beyond the gateway itself (which this project already has).
+
+### Authentication — Three Options
+
+The docs show three patterns:
+
+**Option 1: API key in request header (simplest)**
+Pass Google API key via `x-goog-api-key` header + `cf-aig-authorization` for the authenticated gateway:
+```bash
+curl "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_name}/google-ai-studio/v1/models/gemini-2.5-flash:generateContent" \
+  --header 'content-type: application/json' \
+  --header 'cf-aig-authorization: Bearer {CF_AIG_TOKEN}' \
+  --header 'x-goog-api-key: {google_studio_api_key}' \
+  --data '{ ... }'
 ```
 
-## 5. Production Readiness & Privacy
-To move from development to production:
-1.  **Enable Billing in AI Studio:** Link a credit card to move to the **Paid Tier**.
-2.  **Data Privacy:** Once billing is enabled, Google **does not** use your submitted documents or model outputs for training.
-3.  **Rate Limits:** The Paid Tier increases limits to **2,000 Requests Per Minute**, providing ample headroom for scaling.
-4.  **Secrets Management:** Store your Google API Key securely in **Cloudflare Secrets** rather than hardcoding it in your Worker.
+**Option 2: BYOK (Store key in dashboard)**
+Store the Google API key in AI Gateway → Provider Keys. Then only `cf-aig-authorization` is needed — gateway injects the Google key automatically:
+```bash
+curl "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_name}/google-ai-studio/v1/models/gemini-2.5-flash:generateContent" \
+  --header 'content-type: application/json' \
+  --header 'cf-aig-authorization: Bearer {CF_AIG_TOKEN}' \
+  --data '{ ... }'
+```
 
-***
+**Option 3: Unauthenticated gateway**
+If gateway auth is disabled, only `x-goog-api-key` is needed. Not recommended.
 
-### Quick Start Instructions:
-1.  **Get Key:** Visit [aistudio.google.com](https://aistudio.google.com/) and generate an API key.
-2.  **Create Gateway:** In the Cloudflare Dashboard, go to **AI > AI Gateway** and create a new gateway named `invoice-processor`.
-3.  **Deploy Worker:** Use the logic above in a Cloudflare Worker to begin extracting structured data from invoices.
+### Correction from original research
+
+The original doc said authentication is via query param (`?key=YOUR_KEY`). **That's wrong.** Per the Cloudflare docs, the Google API key goes in the `x-goog-api-key` header, not as a query parameter. The query param style is the native Google AI Studio API format, but when proxied through AI Gateway, use headers.
+
+### Fits existing project pattern
+
+This project already uses the gateway with `cf-aig-authorization` header + provider auth header (see `src/lib/invoice-extraction.ts` L191-196). For Google AI Studio, swap `Authorization: Bearer {workersAiApiToken}` → `x-goog-api-key: {googleApiKey}`.
+
+## 4. Implementation
+
+### Request Body (Gemini generateContent API)
+
+```typescript
+const response = await fetch(
+  `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/google-ai-studio/v1/models/gemini-2.5-flash:generateContent`,
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": googleApiKey,
+      "cf-aig-authorization": `Bearer ${aiGatewayToken}`,
+    },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: buildPrompt() },
+          { inlineData: { mimeType: "image/jpeg", data: base64ImageData } },
+        ],
+      }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: InvoiceExtractionJsonSchema,
+      },
+    }),
+  }
+);
+```
+
+### Schema
+
+Reuse the existing `InvoiceExtractionSchema` and `InvoiceExtractionJsonSchema` from `src/lib/invoice-extraction.ts`. Gemini's `responseSchema` accepts JSON Schema format which `Schema.toJsonSchemaDocument` already produces.
+
+### Effect v4 Note
+
+The original research doc used `import { Schema, JSONSchema } from "@effect/schema"` — that's Effect v3 syntax. In Effect v4, it's:
+```typescript
+import * as Schema from "effect/Schema";
+const jsonSchema = Schema.toJsonSchemaDocument(InvoiceExtractionSchema);
+```
+The project already does this correctly in `src/lib/invoice-extraction.ts`.
+
+## 5. PDF Handling
+
+Gemini Flash accepts PDFs directly via `inlineData` with `mimeType: "application/pdf"`. This means:
+- **Images:** Send as `image/jpeg` or `image/png` in `inlineData`
+- **PDFs:** Send as `application/pdf` in `inlineData`
+
+No need for `toMarkdown` at all — Gemini handles the visual parsing internally. This is a major simplification over the current pipeline.
+
+## 6. Production Checklist
+
+1. **Google AI Studio API Key:** Get from [aistudio.google.com](https://aistudio.google.com/)
+2. **Enable Billing:** Link credit card for paid tier (privacy guarantee, higher rate limits)
+3. **Store key:** Either as Cloudflare secret (`wrangler secret put GOOGLE_AI_STUDIO_KEY`) or via BYOK in AI Gateway dashboard
+4. **Gateway:** Already exists in this project (`AI_GATEWAY_ID` env var)
+5. **No dashboard config needed:** The gateway proxies to `google-ai-studio` based on the URL path — it's automatic
+
+## 7. Comparison with Current Approach
+
+| | Current (Workers AI) | Proposed (Gemini Flash) |
+|---|---|---|
+| **PDF flow** | `toMarkdown` → `gpt-oss-120b` (2 calls) | Single Gemini call |
+| **Image flow** | Not supported well | Single Gemini call |
+| **Model size** | 120B text-only + 12B vision | Gemini 2.5 Flash (multimodal) |
+| **Structured output** | Responses API JSON schema | Native `responseSchema` |
+| **Cost** | $0.35/M in + $0.75/M out (gpt-oss) | ~$0.10/M in + ~$0.40/M out |
+| **Accuracy on images** | Poor (11B vision → 120B text) | Good (purpose-built multimodal) |
+
+## Sources
+
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/usage/providers/google-ai-studio.mdx`
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/bring-your-own-keys.mdx`
+- `refs/cloudflare-docs/src/content/docs/ai-gateway/configuration/authentication.mdx`
+- `src/lib/invoice-extraction.ts` (existing gateway + schema pattern)
