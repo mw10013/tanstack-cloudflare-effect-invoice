@@ -1,93 +1,236 @@
-# Invoice Extraction Workflow -> Effect v4 Refactor Research
+# Invoice Extraction Workflow Effect v4 Design Research
 
-## Verdict
+## Goal
 
-The original direction was mostly correct, but a few key parts needed correction:
+Refactor `src/invoice-extraction-workflow.ts` so that:
 
-- `Encoding.encodeBase64(fileBytes)` is the right replacement for `Buffer.from(fileBytes).toString("base64")` per `refs/effect4/packages/effect/src/Encoding.ts:70`.
-- `HttpClientResponse.schemaBodyJson(...)` is the idiomatic Effect v4 response decode path per `refs/effect4/ai-docs/src/50_http-client/10_basics.ts:46`.
-- `FetchHttpClient.layer` is the right minimal runtime layer for Worker `fetch` per `refs/effect4/packages/effect/src/unstable/http/FetchHttpClient.ts:71`.
-- Tagged domain errors should follow the same `Schema.TaggedErrorClass` pattern as `src/lib/D1.ts:57`, `src/lib/R2.ts:46`, and `src/lib/Stripe.ts:227`.
+- `run()` constructs the needed layers/services once
+- `run()` returns a promise produced by running one top-level Effect
+- each `step.do(..., asyncThunk)` still owns the durable promise boundary
+- the async thunks run Effects using the same already-constructed services
 
-But:
+This is viable in Effect v4.
 
-- The workflow does not need to be fully converted to one large Effect as a first step.
-- If we use nested `Effect.runPromise(...)`, the layer must be provided to the exact Effect being run; an outer provided layer does not automatically flow into a separate inner runtime call.
-- Using `filterStatusOk` too early would throw away the current non-2xx response body, which is currently useful for diagnosis in `src/invoice-extraction-workflow.ts:167`.
-- `run()` currently returns `{ invoiceId }` but the workflow generic declares `{ readonly status: string; readonly message: string }` in `src/invoice-extraction-workflow.ts:57`. That mismatch should be fixed as part of or before the refactor.
+## Effect v4 Runtime Model
 
-## Current State
+Effect v4 no longer has the old `Runtime<R>` value as the primary app-level dependency carrier.
 
-`src/invoice-extraction-workflow.ts` is plain async/await inside `AgentWorkflow.run()`:
+Docs:
 
-- raw `fetch` to Gemini via AI Gateway
-- manual base64 via `Buffer`
-- `Schema.decodeUnknownSync` for Gemini envelope and extracted JSON
-- bare `throw new Error(...)`
-- direct `this.env.*` secret access
-- workflow output type mismatch: declared output does not match actual return value
+- `"In v4, this type no longer exists and you can use ServiceMap<R> instead"` — `refs/effect4/migration/runtime.md:15-16`
+- `"Run functions live directly on Effect"` — `refs/effect4/migration/runtime.md:16`
 
-Current code:
+Relevant primitives:
 
-```ts
-const extractedJson = await step.do("extract-invoice", async () => {
-  const result = await runInvoiceExtraction({
-    accountId: this.env.CF_ACCOUNT_ID,
-    gatewayId: this.env.AI_GATEWAY_ID,
-    googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
-    aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-    fileBytes,
-    contentType: event.payload.contentType,
-  });
-  return result;
-});
-```
+- `Effect.runPromise(effect)` — run a fully-provided effect at the edge: `refs/effect4/packages/effect/src/Effect.ts:8438`
+- `Effect.runPromiseWith(services)(effect)` — run an effect with an explicit `ServiceMap`: `refs/effect4/packages/effect/src/Effect.ts:8471`
+- `Effect.runPromiseExitWith(services)(effect)` — same but preserve `Exit`: `refs/effect4/packages/effect/src/Effect.ts:8559`
+- `Effect.services()` — get the current `ServiceMap`: `refs/effect4/packages/effect/src/Effect.ts:5524`
+- `Effect.servicesWith(...)` — derive work from the current `ServiceMap`: `refs/effect4/packages/effect/src/Effect.ts:5570`
+- `Effect.provideServices(effect, services)` — re-provide a captured `ServiceMap`: `refs/effect4/packages/effect/src/Effect.ts:5694`
 
-## Constraint: AgentWorkflow Boundary
+That means the correct mental model is:
 
-`AgentWorkflow.run()` is an async method owned by the Cloudflare Agents framework, so Effect must still be run at the boundary as a promise. We are not replacing the class shape.
+1. build a layer stack
+2. provide it to one top-level Effect
+3. inside that Effect, capture the current services when needed
+4. when crossing back out to promise/callback land, use `runPromiseWith(services)` or `provideServices(..., services)`
+
+## Answer To The Main Question
+
+Yes: `run()` can and should return the promise from one top-level Effect.
+
+The right shape is:
 
 ```ts
 async run(event, step) {
-  return Effect.runPromise(program)
+  const runtimeLayer = ...
+  return Effect.runPromise(
+    main(event, step).pipe(Effect.provide(runtimeLayer)),
+  )
 }
 ```
 
-That said, the best first refactor is not necessarily "convert the entire method body into one giant Effect". The more incremental and codebase-aligned move is:
+This matches the repo's boundary pattern in `src/worker.ts:64-66`:
 
-- keep `run()` and `step.do(...)` as the workflow boundary
-- move invoice extraction into a dedicated Effect service
-- run that service inside the `step.do("extract-invoice", ...)` promise boundary
+```ts
+return <A, E>(
+  effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+) => Effect.runPromise(Effect.provide(effect, runtimeLayer));
+```
+
+## The Important Step Boundary Pattern
+
+`step.do()` is different from ordinary code in the Effect body because it requires an async thunk returning a promise.
+
+So the durable boundary should remain:
+
+```ts
+step.do("extract-invoice", () => Promise<A>)
+```
+
+If the step body is implemented as an Effect, that thunk must bridge the Effect to a promise.
+
+The key question is: how do we make that nested Effect use the same services already constructed for the top-level Effect?
+
+Effect v4 provides the exact mechanism:
+
+- capture current services once with `yield* Effect.services()`
+- build `const runPromise = Effect.runPromiseWith(services)`
+- inside each `step.do` thunk, call `runPromise(subEffect)`
+
+This is not a hack. It is a first-class v4 pattern.
+
+Grounding from refs:
+
+- `const runFork = Effect.runForkWith(yield* Effect.services<RX>())` — `refs/effect4/packages/effect/src/Channel.ts:1867`
+- `const services = yield* Effect.services<R>()` and later `Effect.provideServices(f(exit), services)` — `refs/effect4/packages/effect/src/unstable/workflow/Workflow.ts:694-695`
+- `ManagedRuntime` internally uses cached services and then `Effect.runPromiseWith(self.cachedServices)(effect)` — `refs/effect4/packages/effect/src/ManagedRuntime.ts:236-241`
+
+So yes: the correct deep pattern is to snapshot the current `ServiceMap` once inside the running Effect, then reuse it for step thunks.
+
+## Public API vs Low-Level Fiber Access
+
+There is low-level fiber access in v4, but it is not the app-level pattern to use here.
+
+Public API:
+
+- `Effect.services()`
+- `Effect.servicesWith(...)`
+- `Effect.provideServices(...)`
+- `Effect.runPromiseWith(...)`
+
+Low-level/internal-ish style:
+
+- `Effect.withFiber((fiber) => ...)`
+- direct `fiber.services`
+
+The public API already expresses exactly what this workflow needs. There is no reason to reach for `withFiber` here.
 
 ## Recommended Architecture
 
-### 1. Introduce an `InvoiceExtraction` service
+### 1. One top-level Effect in `run()`
 
-This should follow the same service shape used elsewhere in the repo:
+`run()` should:
 
-- `ServiceMap.Service` service definition
-- `Layer.effect(this, this.make)` layer
-- pull `CloudflareEnv` from context for secrets and bindings
-- use `Effect.fn(...)` for the main operation
-
-References:
-
-- `src/lib/D1.ts:5`
-- `src/lib/R2.ts:5`
-- `src/lib/Repository.ts:7`
+- capture `this.env` / `this.agent` into locals before entering generators
+- build a runtime layer from existing services
+- run one Effect with `Effect.runPromise(...)`
 
 Sketch:
 
 ```ts
-import { Effect, Layer, Schema, ServiceMap } from "effect";
-import * as Encoding from "effect/Encoding";
-import * as HttpBody from "effect/unstable/http/HttpBody";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+async run(event, step) {
+  const env = this.env;
+  const agent = this.agent;
 
-import { CloudflareEnv } from "@/lib/CloudflareEnv";
+  const envLayer = Layer.succeedServices(ServiceMap.make(CloudflareEnv, env));
+  const r2Layer = Layer.provideMerge(R2.layer, envLayer);
+  const invoiceExtractionLayer = Layer.provideMerge(
+    InvoiceExtraction.layer,
+    Layer.merge(envLayer, FetchHttpClient.layer),
+  );
+  const runtimeLayer = Layer.merge(r2Layer, invoiceExtractionLayer);
 
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const services = yield* Effect.services<Layer.Success<typeof runtimeLayer>>();
+      const runWithServices = Effect.runPromiseWith(services);
+
+      const doEffectStep = <A, E>(
+        name: string,
+        effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+      ) =>
+        Effect.tryPromise({
+          try: () => step.do(name, () => runWithServices(effect)),
+          catch: (cause) => new InvoiceWorkflowError({
+            message: `workflow step failed: ${name}`,
+            cause,
+          }),
+        });
+
+      const fileBytes = yield* doEffectStep(
+        "load-file",
+        loadFileEffect({ r2ObjectKey: event.payload.r2ObjectKey }),
+      );
+
+      const extracted = yield* doEffectStep(
+        "extract-invoice",
+        Effect.gen(function* () {
+          const invoiceExtraction = yield* InvoiceExtraction;
+          return yield* invoiceExtraction.extract({
+            fileBytes,
+            contentType: event.payload.contentType,
+          });
+        }),
+      );
+
+      yield* doEffectStep(
+        "save-extracted-json",
+        saveExtractedJsonEffect({
+          agent,
+          invoiceId: event.payload.invoiceId,
+          idempotencyKey: event.payload.idempotencyKey,
+          extracted,
+        }),
+      );
+
+      return { invoiceId: event.payload.invoiceId };
+    }).pipe(Effect.provide(runtimeLayer)),
+  );
+}
+```
+
+This gives you:
+
+- one top-level Effect boundary in `run()`
+- durable `step.do` promises still owning each step
+- each step thunk executing an Effect with the exact same service graph
+
+### 2. Use existing services where they actually help
+
+Existing useful services in this repo:
+
+- `CloudflareEnv` — `src/lib/CloudflareEnv.ts:3`
+- `R2` — `src/lib/R2.ts:5`
+
+Note: `saveExtractedJson` currently exists on the DO agent object, not as an Effect service, so that last step can reasonably stay a closure-based Effect over `agent` for now.
+
+So `load-file` should prefer the existing `R2` service rather than direct `env.R2.get(...)`.
+
+Sketch:
+
+```ts
+const loadFileEffect = ({ r2ObjectKey }: { readonly r2ObjectKey: string }) =>
+  Effect.gen(function* () {
+    const r2 = yield* R2;
+    const object = yield* r2.get(r2ObjectKey);
+    if (Option.isNone(object)) {
+      return yield* new InvoiceWorkflowError({
+        message: `Invoice file not found: ${r2ObjectKey}`,
+        cause: new Error(`Invoice file not found: ${r2ObjectKey}`),
+      });
+    }
+    return new Uint8Array(yield* Effect.promise(() => object.value.arrayBuffer()));
+  });
+```
+
+That keeps the workflow aligned with the service-oriented codebase instead of bypassing it.
+
+### 3. Introduce an `InvoiceExtraction` service
+
+The extraction HTTP/decode logic should be a proper service, not a free function with secret parameters.
+
+Why:
+
+- matches `src/lib/D1.ts:5`, `src/lib/R2.ts:5`, `src/lib/Repository.ts:7`
+- pulls secrets from `CloudflareEnv` rather than from call sites
+- composes naturally with `FetchHttpClient.layer`
+- becomes straightforward to run from `step.do` using captured services
+
+Sketch:
+
+```ts
 export class InvoiceExtraction extends ServiceMap.Service<InvoiceExtraction>()(
   "InvoiceExtraction",
   {
@@ -129,7 +272,7 @@ export class InvoiceExtraction extends ServiceMap.Service<InvoiceExtraction>()(
           }),
         }).pipe(client.execute);
 
-        return yield* decodeGeminiResponse(response);
+        return yield* decodeInvoiceExtractionResponse(response);
       });
 
       return { extract };
@@ -140,148 +283,119 @@ export class InvoiceExtraction extends ServiceMap.Service<InvoiceExtraction>()(
 }
 ```
 
-Why service instead of free function with secret params:
+## Why `runPromiseWith(services)` Is The Right Bridge
 
-- aligns with the existing repo's Effect style
-- removes direct secret plumbing through call sites
-- makes `CloudflareEnv` useful in the same way it is in `src/lib/D1.ts:7` and `src/lib/R2.ts:7`
-- makes testing easier via service substitution
+The workflow has two different execution domains:
 
-### 2. Keep the workflow step boundary as the owner of the promise
+- Effect domain: the main orchestration logic
+- promise domain: `step.do(..., asyncThunk)` required by the Agents framework
 
-The durable boundary is still `step.do("extract-invoice", ...)`.
+`runPromiseWith(services)` is the exact bridge between them.
 
-Recommended shape:
+It is better than rebuilding the layer graph inside each step thunk because:
 
-```ts
-async run(event, step) {
-  const envLayer = Layer.succeedServices(ServiceMap.make(CloudflareEnv, this.env));
-  const runtimeLayer = Layer.provideMerge(
-    InvoiceExtraction.layer,
-    Layer.merge(envLayer, FetchHttpClient.layer),
-  );
+- services are constructed once
+- all steps share the same environment view
+- any service overrides/local provisions already active in the top-level Effect are preserved
+- the step thunk stays thin and only performs the boundary conversion
 
-  const fileBytes = await step.do("load-file", async () => {
-    const object = await this.env.R2.get(event.payload.r2ObjectKey);
-    if (!object) throw new Error(`Invoice file not found: ${event.payload.r2ObjectKey}`);
-    return new Uint8Array(await object.arrayBuffer());
-  });
-
-  const extractedJson = await step.do("extract-invoice", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const invoiceExtraction = yield* InvoiceExtraction;
-        return yield* invoiceExtraction.extract({
-          fileBytes,
-          contentType: event.payload.contentType,
-        });
-      }).pipe(Effect.provide(runtimeLayer)),
-    ),
-  );
-
-  await step.do("save-extracted-json", async () => {
-    await this.agent.saveExtractedJson({
-      invoiceId: event.payload.invoiceId,
-      idempotencyKey: event.payload.idempotencyKey,
-      extractedJson: JSON.stringify(extractedJson),
-    });
-  });
-
-  return { invoiceId: event.payload.invoiceId };
-}
-```
-
-Important correction: if we call `Effect.runPromise(...)` inside `step.do`, we must provide the layer to that exact Effect. The outer workflow async function does not magically share its Effect context with a separate runtime invocation.
-
-This matches the general boundary pattern in `src/worker.ts:64-66` and `src/worker.ts:120-122`, where the layer is provided to the specific effect being run.
-
-### 3. Use `CloudflareEnv` in the runtime layer
-
-This repo already has:
+Equivalent lower-level shape if `runPromiseWith` did not exist:
 
 ```ts
-export const CloudflareEnv = ServiceMap.Service<Env>("CloudflareEnv");
+const services = yield* Effect.services<R>();
+const promise = Effect.runPromise(Effect.provideServices(subEffect, services));
 ```
 
-Source: `src/lib/CloudflareEnv.ts:3`
+But `runPromiseWith(services)(subEffect)` is the built-in shorthand for exactly that style of execution.
 
-So the workflow can construct a minimal local layer:
+## ManagedRuntime: Useful, But Not The Best Primary Pattern Here
+
+`ManagedRuntime` is real and documented:
+
+- `ManagedRuntime.make(layer)` — `refs/effect4/packages/effect/src/ManagedRuntime.ts:160`
+- example bridge for external frameworks — `refs/effect4/ai-docs/src/03_integration/10_managed-runtime.ts:67-76`
+
+It can work here:
 
 ```ts
-const envLayer = Layer.succeedServices(ServiceMap.make(CloudflareEnv, this.env));
-const runtimeLayer = Layer.provideMerge(
-  InvoiceExtraction.layer,
-  Layer.merge(envLayer, FetchHttpClient.layer),
-);
+const runtime = ManagedRuntime.make(runtimeLayer);
+return runtime.runPromise(mainEffect);
 ```
 
-We do not need the full `worker.ts` layer graph for this workflow. The minimal dependencies here are:
-
-- `CloudflareEnv` for secrets
-- `HttpClient.HttpClient` via `FetchHttpClient.layer`
-- `InvoiceExtraction` via its service layer
-
-### 4. Do not use `filterStatusOk` too early
-
-The initial research proposed:
+And then step callbacks could call:
 
 ```ts
-Effect.flatMap(HttpClientResponse.filterStatusOk),
-Effect.flatMap(HttpClientResponse.schemaBodyJson(GeminiResponseSchema)),
+step.do("extract-invoice", () => runtime.runPromise(effect))
 ```
 
-That is not ideal here.
+But for this specific workflow, it is not the best primary pattern.
 
-`HttpClientResponse.filterStatusOk` fails immediately on non-2xx status with `HttpClientError` in `refs/effect4/packages/effect/src/unstable/http/HttpClientResponse.ts:201`. If we do that first, we lose the current behavior of inspecting and persisting the AI Gateway response body for debugging.
+Reasons:
 
-Recommended approach:
+- `ManagedRuntime` is most useful when you need a reusable runtime object shared across many non-Effect handlers
+- in this workflow, we already have a top-level Effect; we mainly need to cross from that Effect into nested promise callbacks
+- `Effect.services()` + `Effect.runPromiseWith(services)` is more direct and keeps the execution model explicit
+- if you create a fresh `ManagedRuntime` per workflow run, you also need to think about disposal for scoped resources; the top-level `Effect.provide(runtimeLayer)` path avoids introducing another lifecycle object
 
-- execute request
-- inspect `response.status`
-- for non-2xx, read `response.text` or `response.json`
-- fail with `InvoiceExtractionError` that includes status and body excerpt
-- only decode success responses with `schemaBodyJson`
+So:
 
-Sketch:
+- `ManagedRuntime` is valid
+- capturing current services and using `runPromiseWith` is the tighter fit
+
+## Response / Decode Design
+
+### Base64
+
+Use `Encoding.encodeBase64(fileBytes)`.
+
+Docs:
+
+- `export const encodeBase64: (input: Uint8Array | string) => string` — `refs/effect4/packages/effect/src/Encoding.ts:70`
+
+### JSON body decode
+
+For success responses, `HttpClientResponse.schemaBodyJson(...)` is the idiomatic path.
+
+Docs example:
+
+- `Effect.flatMap(HttpClientResponse.schemaBodyJson(Todo))` — `refs/effect4/ai-docs/src/50_http-client/10_basics.ts:64`
+
+### Do not throw away non-2xx bodies
+
+Do not blindly call `HttpClientResponse.filterStatusOk` first.
+
+Docs show it fails immediately on non-2xx:
+
+- `filterStatusOk` returns failure for non-2xx — `refs/effect4/packages/effect/src/unstable/http/HttpClientResponse.ts:201-210`
+
+For AI Gateway, the error body is operationally important, so the extraction service should:
+
+1. inspect `response.status`
+2. if non-2xx, read `response.text`
+3. map to `InvoiceExtractionError` with status + body excerpt
+4. only decode success bodies with `schemaBodyJson`
+
+### JSON string payload decode
+
+Gemini returns extracted JSON as text. The correct Effect schema tool is:
 
 ```ts
-const decodeGeminiResponse = (response: HttpClientResponse.HttpClientResponse) =>
-  response.status >= 200 && response.status < 300
-    ? HttpClientResponse.schemaBodyJson(GeminiResponseSchema)(response).pipe(
-        Effect.flatMap(({ candidates }) =>
-          Schema.decodeUnknownEffect(Schema.fromJsonString(InvoiceExtractionSchema))(
-            candidates[0].content.parts[0].text,
-          ),
-        ),
-      )
-    : response.text.pipe(
-        Effect.flatMap((body) =>
-          Effect.fail(
-            new InvoiceExtractionError({
-              message: `AI Gateway ${response.status}: ${body}`,
-              cause: new Error(`AI Gateway ${response.status}`),
-            }),
-          ),
-        ),
-      );
+Schema.fromJsonString(InvoiceExtractionSchema)
 ```
 
-This preserves the main diagnostic value of the current implementation in `src/invoice-extraction-workflow.ts:167-174`.
+Docs:
 
-### 5. Typed domain error remains correct
+- `"Returns a schema that decodes a JSON string and then decodes the parsed value using the given schema"` — `refs/effect4/packages/effect/src/Schema.ts:7072-7079`
 
-The existing service pattern in this repo is:
+## Error Design
 
-```ts
-export class D1Error extends Schema.TaggedErrorClass<D1Error>()("D1Error", {
-  message: Schema.String,
-  cause: Schema.Defect,
-}) {}
-```
+Stay aligned with existing repo style:
 
-Source: `src/lib/D1.ts:57`
+- `src/lib/D1.ts:57`
+- `src/lib/R2.ts:46`
+- `src/lib/Stripe.ts:227`
 
-So this remains correct:
+Use tagged errors:
 
 ```ts
 export class InvoiceExtractionError extends Schema.TaggedErrorClass<InvoiceExtractionError>()(
@@ -291,239 +405,111 @@ export class InvoiceExtractionError extends Schema.TaggedErrorClass<InvoiceExtra
     cause: Schema.Defect,
   },
 ) {}
+
+export class InvoiceWorkflowError extends Schema.TaggedErrorClass<InvoiceWorkflowError>()(
+  "InvoiceWorkflowError",
+  {
+    message: Schema.String,
+    cause: Schema.Defect,
+  },
+) {}
 ```
 
-And the service helper should follow the repo pattern:
+Suggested split:
+
+- `InvoiceExtractionError` for HTTP / Gemini envelope / payload decode failures
+- `InvoiceWorkflowError` for step-boundary orchestration failures
+
+## Recommended Concrete Shape
+
+### Runtime layer
+
+Build only what the workflow needs:
+
+- `CloudflareEnv`
+- `R2`
+- `FetchHttpClient.layer`
+- `InvoiceExtraction.layer`
+- optionally logger layer later
+
+Sketch:
 
 ```ts
-const failInvoiceExtraction = (message: string, cause: unknown) =>
-  new InvoiceExtractionError({
-    message,
-    cause,
+const envLayer = Layer.succeedServices(ServiceMap.make(CloudflareEnv, env));
+const r2Layer = Layer.provideMerge(R2.layer, envLayer);
+const extractionLayer = Layer.provideMerge(
+  InvoiceExtraction.layer,
+  Layer.merge(envLayer, FetchHttpClient.layer),
+);
+const runtimeLayer = Layer.merge(r2Layer, extractionLayer);
+```
+
+### Step runner helper
+
+This is the core reusable construct:
+
+```ts
+const services = yield* Effect.services<Layer.Success<typeof runtimeLayer>>();
+const runWithServices = Effect.runPromiseWith(services);
+
+const doEffectStep = <A, E>(
+  name: string,
+  effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+) =>
+  Effect.tryPromise({
+    try: () => step.do(name, () => runWithServices(effect)),
+    catch: (cause) =>
+      new InvoiceWorkflowError({
+        message: `workflow step failed: ${name}`,
+        cause,
+      }),
   });
 ```
 
-or via `Effect.tryPromise({ try, catch })` / `Effect.mapError(...)` depending on where the failure originates.
+That is the main v4 construct this workflow needs.
 
-### 6. Base64 replacement is correct
+## What Still Needs To Be Settled Before Implementation
 
-Current code:
+1. Workflow return type
+   - current generic in `src/invoice-extraction-workflow.ts:57-60` does not match the actual returned shape in `src/invoice-extraction-workflow.ts:106`
 
-```ts
-data: Buffer.from(fileBytes).toString("base64")
-```
-
-Recommended:
-
-```ts
-Encoding.encodeBase64(fileBytes)
-```
-
-Verified in `refs/effect4/packages/effect/src/Encoding.ts:70-71`.
-
-### 7. JSON decode path is correct, but needs one more domain check
-
-This part is fine:
-
-```ts
-Schema.decodeUnknownEffect(Schema.fromJsonString(InvoiceExtractionSchema))(
-  text,
-)
-```
-
-`Schema.fromJsonString(...)` is specifically meant for "decode a JSON string, then decode parsed value with the given schema" per `refs/effect4/packages/effect/src/Schema.ts:7072-7079`.
-
-But one extra validation branch is needed before assuming:
-
-```ts
-candidates[0].content.parts[0].text
-```
-
-We should explicitly handle:
-
-- empty `candidates`
-- missing `parts`
-- non-text content
-- refusal / blocked output shapes if Gemini returns them
-
-The envelope schema can stay strict, but the domain error message should clearly say whether the failure was:
-
-- transport
-- non-2xx gateway response
-- malformed Gemini envelope
-- invalid extracted JSON payload
-- empty/no-text model response
-
-## Whole `run()` as Effect?
-
-Possible, but not recommended as the first implementation step.
-
-Reasons:
-
-- the workflow durability boundary is already expressed by `step.do(...)`
-- the real value here is typed extraction logic, not wrapping every workflow line in Effect
-- wrapping `step.do(...)` in `Effect.tryPromise(() => ...)` without explicit `catch` mapping weakens typed errors
-- using `this.env` / `this.agent` inside `Effect.gen(function* () { ... })` requires careful capture of `this`
-
-If we ever do move the whole method to Effect, capture first:
-
-```ts
-const env = this.env;
-const agent = this.agent;
-```
-
-before entering `Effect.gen(...)`.
-
-For now, the recommended split is:
-
-- async workflow shell
-- Effect service for extraction logic
-- minimal workflow-local runtime layer
-
-## Recommended Design
-
-### Module boundaries
-
-- keep `InvoiceExtractionSchema` and prompt close to the invoice extraction module
-- move extraction HTTP/decode logic out of `src/invoice-extraction-workflow.ts`
-- create `src/lib/InvoiceExtraction.ts` or similar service module
-
-### Static values to hoist
-
-These are pure and should be computed once at module load time:
-
-```ts
-const invoiceExtractionJsonSchema =
-  Schema.toJsonSchemaDocument(InvoiceExtractionSchema).schema;
-
-const GeminiResponseSchema = Schema.Struct({
-  candidates: Schema.NonEmptyArray(
-    Schema.Struct({
-      content: Schema.Struct({
-        parts: Schema.NonEmptyArray(Schema.Struct({ text: Schema.String })),
-      }),
-    }),
-  ),
-});
-```
-
-Current code already builds the JSON schema inline in `src/invoice-extraction-workflow.ts:162`; hoisting it avoids recreating it on every request.
-
-### Logging
-
-Inside the new service, use the same pattern as existing services:
-
-```ts
-Effect.tapError((error) => Effect.logError(error))
-```
-
-References:
-
-- `src/lib/D1.ts:79`
-- `src/lib/R2.ts:66`
-- `src/lib/Stripe.ts:243`
-
-For the first implementation, relying on the default logger is acceptable. A shared workflow logger layer can come later if needed.
-
-### Retry
-
-Effect-level retry is optional but reasonable for transport and 5xx failures.
-
-The Effect docs demonstrate `HttpClient.retryTransient(...)` with exponential backoff in `refs/effect4/ai-docs/src/50_http-client/10_basics.ts:39-42`.
-
-Recommendation:
-
-- keep workflow-level retry via Agents step durability
-- optionally add `HttpClient.retryTransient(...)` or `Effect.retry(...)` inside the extraction service for transport and 5xx only
-- do not retry schema failures or model-output failures
-
-## Pattern Alignment Table
-
-| Pattern | Reference | Recommendation |
-|---|---|---|
-| `ServiceMap.Service` + `Layer.effect` | `src/lib/D1.ts:5`, `src/lib/R2.ts:5` | Use for `InvoiceExtraction` |
-| pull env from context | `src/lib/D1.ts:7`, `src/lib/R2.ts:7` | Use `CloudflareEnv` instead of passing secrets as params |
-| tagged domain errors | `src/lib/D1.ts:57`, `src/lib/R2.ts:46`, `src/lib/Stripe.ts:227` | Use `InvoiceExtractionError` |
-| `Effect.fn("...")` named operations | `src/lib/Repository.ts:10`, `src/lib/R2.ts:8` | Name `InvoiceExtraction.extract` |
-| `schemaBodyJson` response decode | `refs/effect4/ai-docs/src/50_http-client/10_basics.ts:46` | Use for 2xx body decode |
-| `FetchHttpClient.layer` | `refs/effect4/packages/effect/src/unstable/http/FetchHttpClient.ts:71` | Provide in workflow-local runtime |
-| `Encoding.encodeBase64` | `refs/effect4/packages/effect/src/Encoding.ts:70` | Replace `Buffer` usage |
-| `Schema.fromJsonString(...)` | `refs/effect4/packages/effect/src/Schema.ts:7072` | Decode Gemini text payload |
-| `Effect.tapError(Effect.logError)` | `src/lib/D1.ts:79`, `src/lib/R2.ts:66` | Use in service helper |
-
-## Implementation Notes
-
-### Recommended imports
-
-```ts
-import { Effect, Layer, Schema, ServiceMap } from "effect";
-import * as Encoding from "effect/Encoding";
-import * as HttpBody from "effect/unstable/http/HttpBody";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import { FetchHttpClient } from "effect/unstable/http";
-
-import { CloudflareEnv } from "@/lib/CloudflareEnv";
-```
-
-### Workflow output type
-
-Fix this mismatch during refactor:
-
-```ts
-export class InvoiceExtractionWorkflow extends AgentWorkflow<
-  OrganizationAgent,
-  InvoiceExtractionWorkflowParams,
-  { readonly status: string; readonly message: string }
->
-```
-
-but `run()` currently returns:
-
-```ts
-return { invoiceId: event.payload.invoiceId };
-```
-
-The declared output type should match the actual payload.
-
-## What Is Still Needed Before Implementation
-
-1. Decide final module placement
+2. Exact service module placement
    - likely `src/lib/InvoiceExtraction.ts`
-   - optionally keep schema/prompt in workflow file, but service ownership is cleaner
 
-2. Decide retry policy
-   - `step.do` retry only
-   - or add transient HTTP retry inside the service as well
+3. How much of the workflow shell to service-ify
+   - `R2` should likely be reused
+   - `agent.saveExtractedJson(...)` can stay as a small closure-based Effect unless a dedicated agent service is introduced
 
-3. Define precise error messages persisted to `onWorkflowError`
-   - `src/organization-agent.ts:201` stores a string
-   - choose how much raw gateway body to include vs truncate/sanitize
+4. Retry policy
+   - workflow durability retry via `step.do`
+   - optional transient HTTP retry inside `InvoiceExtraction`
+   - do not retry schema failures / malformed model output
 
-4. Add test coverage before or alongside refactor
+5. Persisted error format
+   - `src/organization-agent.ts:201-227` stores workflow error as string
+   - decide whether to truncate/sanitize AI Gateway response bodies
+
+6. Tests
    - success response
-   - non-2xx AI Gateway response
+   - non-2xx gateway body
    - malformed Gemini envelope
-   - valid Gemini envelope with invalid JSON payload
-   - empty/no-text candidate response
-
-5. Decide whether to also Effect-ify `load-file`
-   - not necessary for first pass
-   - can stay plain async in the workflow shell
+   - invalid extracted JSON string
+   - empty candidate / no text response
 
 ## Final Recommendation
 
-Implement the refactor in two layers:
+The strongest v4 design here is:
 
-1. First pass
-   - create `InvoiceExtraction` Effect service
-   - use `CloudflareEnv` and `FetchHttpClient.layer`
-   - preserve gateway error body visibility
-   - keep `AgentWorkflow.run()` and `step.do(...)` mostly async
+- one top-level Effect in `run()`
+- provide the layer graph once at that top level
+- inside the running Effect, capture current services with `Effect.services()`
+- build `runPromiseWith(services)` once
+- make every `step.do` thunk run an Effect through that runner
 
-2. Later, only if it proves useful
-   - move more workflow orchestration into Effect
-   - extract shared workflow runtime helpers if more workflows adopt the same pattern
+That gives you exactly what you asked for:
 
-This gives the project the main benefits of Effect v4 - typed dependencies, typed failures, idiomatic HTTP/schema composition, and service alignment with the rest of the repo - without overcomplicating the workflow boundary.
+- top-level orchestration remains a single Effect
+- step thunks still satisfy the Agents framework promise contract
+- nested step Effects reuse the already-constructed service graph instead of rebuilding layers or falling back to raw async code
+
+This is not a shallow compromise. It is the direct Effect v4 pattern supported by the runtime migration docs, `runPromiseWith`, `services()`, and the library's own internal use of captured service maps across callback/finalizer/fork boundaries.
