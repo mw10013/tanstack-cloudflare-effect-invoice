@@ -37,13 +37,13 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
     event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
     step: AgentWorkflowStep,
   ) {
-    const env = this.env;
+    // Capture instance state before entering nested Effect / step callback boundaries.
     const agent = this.agent;
     const envLayer = Layer.succeedServices(
-      ServiceMap.make(CloudflareEnv, env).pipe(
+      ServiceMap.make(CloudflareEnv, this.env).pipe(
         ServiceMap.add(
           ConfigProvider.ConfigProvider,
-          ConfigProvider.fromUnknown(env),
+          ConfigProvider.fromUnknown(this.env),
         ),
       ),
     );
