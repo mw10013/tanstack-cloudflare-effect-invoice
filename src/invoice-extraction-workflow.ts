@@ -5,14 +5,6 @@ import type { OrganizationAgent } from "./organization-agent";
 import { AgentWorkflow } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
-const LineItemSchema = Schema.Struct({
-  description: Schema.String,
-  quantity: Schema.String,
-  unitPrice: Schema.String,
-  amount: Schema.String,
-  period: Schema.String,
-});
-
 export const InvoiceExtractionSchema = Schema.Struct({
   invoiceConfidence: Schema.Number,
   invoiceNumber: Schema.String,
@@ -25,24 +17,20 @@ export const InvoiceExtractionSchema = Schema.Struct({
   billToName: Schema.String,
   billToEmail: Schema.String,
   billToAddress: Schema.String,
-  lineItems: Schema.Array(LineItemSchema),
+  lineItems: Schema.Array(
+    Schema.Struct({
+      description: Schema.String,
+      quantity: Schema.String,
+      unitPrice: Schema.String,
+      amount: Schema.String,
+      period: Schema.String,
+    }),
+  ),
   subtotal: Schema.String,
   tax: Schema.String,
   total: Schema.String,
   amountDue: Schema.String,
 });
-
-export const decodeInvoiceExtraction = Schema.decodeUnknownSync(
-  InvoiceExtractionSchema,
-);
-
-const decodeInvoiceExtractionFromJsonString = Schema.decodeUnknownSync(
-  Schema.fromJsonString(InvoiceExtractionSchema),
-);
-
-export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
-  InvoiceExtractionSchema,
-).schema;
 
 const invoiceExtractionPrompt = `You are an invoice data extraction assistant. You will receive a document (PDF or image).
 
@@ -58,17 +46,17 @@ Rules:
 - For line items, include every line item found. Set quantity, unitPrice, or amount to empty string "" if not clearly stated for that item.
 - For addresses, concatenate all address components into a single string (e.g., "101 Townsend Street, San Francisco, California 94107, United States"). Set to empty string "" if no address is found.`;
 
-const GeminiResponseSchema = Schema.Struct({
-  candidates: Schema.NonEmptyArray(
-    Schema.Struct({
-      content: Schema.Struct({
-        parts: Schema.NonEmptyArray(Schema.Struct({ text: Schema.String })),
+const decodeGeminiResponse = Schema.decodeUnknownSync(
+  Schema.Struct({
+    candidates: Schema.NonEmptyArray(
+      Schema.Struct({
+        content: Schema.Struct({
+          parts: Schema.NonEmptyArray(Schema.Struct({ text: Schema.String })),
+        }),
       }),
-    }),
-  ),
-});
-
-const decodeGeminiResponse = Schema.decodeUnknownSync(GeminiResponseSchema);
+    ),
+  }),
+);
 
 const runInvoiceExtraction = async ({
   accountId,
@@ -109,7 +97,8 @@ const runInvoiceExtraction = async ({
       ],
       generationConfig: {
         responseMimeType: "application/json",
-        responseJsonSchema: InvoiceExtractionJsonSchema,
+        responseJsonSchema:
+          Schema.toJsonSchemaDocument(InvoiceExtractionSchema).schema,
       },
     }),
   });
@@ -124,9 +113,9 @@ const runInvoiceExtraction = async ({
     );
   }
   try {
-    const decoded = decodeInvoiceExtractionFromJsonString(
-      decodeGeminiResponse(body).candidates[0].content.parts[0].text,
-    );
+    const decoded = Schema.decodeUnknownSync(
+      Schema.fromJsonString(InvoiceExtractionSchema),
+    )(decodeGeminiResponse(body).candidates[0].content.parts[0].text);
     console.log("[invoice-extraction] decoded", decoded);
     return decoded;
   } catch (error) {
