@@ -88,7 +88,6 @@ const runInvoiceExtraction = async ({
   readonly contentType: string;
 }) => {
   const url = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/google-ai-studio/v1beta/models/gemini-2.5-flash:generateContent`;
-  const startedAt = Date.now();
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -116,27 +115,21 @@ const runInvoiceExtraction = async ({
       },
     }),
   });
-  const elapsedMs = Date.now() - startedAt;
   const body: unknown = await response.json();
   if (!response.ok) {
-    console.error("[invoice-extraction] gemini gateway error", {
-      elapsedMs,
+    console.error("[invoice-extraction] ai gateway error", {
       status: response.status,
       body: JSON.stringify(body),
     });
     throw new Error(
-      `Gemini Gateway ${String(response.status)}: ${JSON.stringify(body)}`,
+      `AI Gateway Response ${String(response.status)}: ${JSON.stringify(body)}`,
     );
   }
-  console.log("[invoice-extraction] gemini gateway returned", {
-    elapsedMs,
-    raw: JSON.stringify(body),
-  });
   try {
     const decoded = decodeInvoiceExtractionFromJsonString(
       decodeGeminiResponse(body).candidates[0].content.parts[0].text,
     );
-    console.log("[invoice-extraction] gemini decoded", decoded);
+    console.log("[invoice-extraction] decoded", decoded);
     return decoded;
   } catch (error) {
     console.error("[invoice-extraction] gemini decode failed", {
@@ -184,7 +177,6 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       return bytes;
     });
     const invoiceJson = await step.do("extract-invoice", async () => {
-      console.log("[workflow:extract-invoice] starting extraction");
       try {
         const result = await runInvoiceExtraction({
           accountId: this.env.CF_ACCOUNT_ID,
@@ -194,7 +186,6 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
           fileBytes,
           contentType: event.payload.contentType,
         });
-        console.log("[workflow:extract-invoice] success", result);
         return result;
       } catch (error) {
         console.error("[workflow:extract-invoice] failed", {
@@ -208,10 +199,6 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       }
     });
     await step.do("save-invoice-json", async () => {
-      console.log("[workflow:save-json]", {
-        invoiceId: event.payload.invoiceId,
-        invoiceJson,
-      });
       await this.agent.applyInvoiceJson({
         invoiceId: event.payload.invoiceId,
         idempotencyKey: event.payload.idempotencyKey,
