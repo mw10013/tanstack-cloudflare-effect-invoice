@@ -9,7 +9,7 @@ const LineItemSchema = Schema.Struct({
 });
 
 export const InvoiceExtractionSchema = Schema.Struct({
-  isInvoice: Schema.Boolean,
+  invoiceConfidence: Schema.Number,
   invoiceNumber: Schema.String,
   invoiceDate: Schema.String,
   dueDate: Schema.String,
@@ -106,8 +106,8 @@ const buildPrompt = (markdown: string) =>
 Analyze the document and extract structured invoice data according to the provided JSON schema.
 
 Rules:
-- Set isInvoice to true only if the document is clearly an invoice.
-- If isInvoice is false, set all other fields to empty string "".
+- Set invoiceConfidence to a number from 0 to 1 indicating how likely the document is an invoice.
+- Always try to populate every field from visible document content regardless of invoiceConfidence.
 - Extract only information explicitly present in the document. Never infer or guess values.
 - Set fields to empty string "" when the information is not found in the document.
 - Keep amounts as strings exactly as they appear in the document, including currency symbols (e.g., "$5.39", "$0.011 per 1,000").
@@ -483,8 +483,8 @@ const geminiPrompt = `You are an invoice data extraction assistant. You will rec
 Analyze the document and extract structured invoice data according to the provided JSON schema.
 
 Rules:
-- Set isInvoice to true only if the document is clearly an invoice.
-- If isInvoice is false, set all other fields to empty string "".
+- Set invoiceConfidence to a number from 0 to 1 indicating how likely the document is an invoice.
+- Always try to populate every field from visible document content regardless of invoiceConfidence.
 - Extract only information explicitly present in the document. Never infer or guess values.
 - Set fields to empty string "" when the information is not found in the document.
 - Keep amounts as strings exactly as they appear in the document, including currency symbols (e.g., "$5.39", "$0.011 per 1,000").
@@ -524,6 +524,7 @@ export const runGeminiInvoiceExtraction = async ({
     url,
     timeoutMs: GEMINI_REQUEST_TIMEOUT_MS,
     contentType,
+    isPng: contentType === "image/png",
     fileBytesLength: fileBytes.length,
   });
   const startedAt = Date.now();
