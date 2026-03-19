@@ -7,7 +7,7 @@
 - Raw `fetch` to Gemini via AI Gateway
 - Manual `Buffer.from(fileBytes).toString("base64")` encoding
 - `Schema.decodeUnknownSync` for both Gemini envelope and extracted JSON
-- No typed errors — bare `throw new Error(...)` 
+- No typed errors — bare `throw new Error(...)`
 - Direct `this.env.*` access for secrets instead of Effect services
 
 ## Constraint: AgentWorkflow
@@ -99,7 +99,23 @@ const runInvoiceExtraction = ({
 
 ### 2. Typed error
 
-Following `R2Error` and `GoogleApiError` patterns in codebase:
+Following `D1Error`, `R2Error`, `StripeError` patterns in codebase:
+
+```ts
+// src/lib/D1.ts:57-60
+export class D1Error extends Schema.TaggedErrorClass<D1Error>()("D1Error", {
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+
+// src/lib/R2.ts:46-49
+export class R2Error extends Schema.TaggedErrorClass<R2Error>()("R2Error", {
+  message: Schema.String,
+  cause: Schema.Defect,
+}) {}
+```
+
+Same pattern:
 
 ```ts
 class InvoiceExtractionError extends Schema.TaggedErrorClass<InvoiceExtractionError>()(
@@ -139,7 +155,7 @@ const result = await Effect.runPromise(
 
 ### 5. Gemini response schema
 
-Replace the standalone `decodeGeminiResponse` with an Effect-compatible schema:
+Replace the standalone `decodeGeminiResponse` with schema used via `HttpClientResponse.schemaBodyJson`:
 
 ```ts
 const GeminiResponseSchema = Schema.Struct({
@@ -152,8 +168,6 @@ const GeminiResponseSchema = Schema.Struct({
   ),
 })
 ```
-
-Used via `HttpClientResponse.schemaBodyJson(GeminiResponseSchema)` — effectful, returns `SchemaError` on failure.
 
 ### 6. `run()` integration
 
@@ -198,37 +212,151 @@ async run(event, step) {
 
 The `step.do` calls are Agents framework primitives that provide durable execution (idempotency, replay). They must remain as-is. Effect wraps the **computation inside** each step, not the step orchestration itself.
 
-### Why `HttpClient.execute` (accessor) vs `client.execute` (instance)?
+### Why `HttpClient.execute` (module accessor) vs `client.execute` (instance)?
 
-`google-client.ts` already uses `HttpClient.execute(request)` — the module-level accessor that reads `HttpClient.HttpClient` from context. This is the simpler pattern when you don't need a preconfigured client instance. Consistent with codebase.
+`HttpClient.execute(request)` is the module-level accessor that reads `HttpClient.HttpClient` from context. This is the simpler pattern when you don't need a preconfigured client instance — single request, no shared middleware.
 
-Source: `src/lib/google-client.ts:80`
+Source: `refs/effect4/packages/effect/src/unstable/http/HttpClient.ts:130-132`
 
 ### Why not use the R2 Effect service for `load-file`?
 
-The workflow class only has `this.env.R2` (raw Cloudflare R2 binding), not the Effect `R2` service layer. Wrapping a single `R2.get` call in Effect within a `step.do` adds ceremony without benefit. The `load-file` step stays as-is.
+The workflow class only has `this.env.R2` (raw Cloudflare R2 binding), not the Effect `R2` service layer. The Effect services (`R2`, `D1`, `KV`) are composed in `worker.ts` layers for the HTTP request path. The AgentWorkflow runs in a different context (Durable Object). Wrapping a single `R2.get` call in Effect within a `step.do` adds ceremony without benefit.
 
-### Why `HttpClientResponse.filterStatusOk` instead of `HttpClient.filterStatusOk`?
+### Error handling pattern: `tryStripe`/`tryD1`/`tryR2` → `catchTag`
 
-Both work. The response-level `filterStatusOk` is used in `google-client.ts:81` (`Effect.flatMap(HttpClientResponse.filterStatusOk)`). Client-level `filterStatusOk` pre-applies to all requests. Since we have a single request, response-level is fine and matches existing codebase pattern.
+The codebase services use a `try*` helper to wrap promises in Effect with typed errors:
 
-## Codebase Pattern Alignment
+```ts
+// src/lib/D1.ts:71-79
+const tryD1 = <A>(evaluate: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) =>
+      new D1Error({
+        message: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }),
+  }).pipe(Effect.tapError((error) => Effect.logError(error)));
+```
 
-| Pattern | Reference | Applied Here |
+For the extraction workflow, the HttpClient pipeline already produces typed errors (`HttpClientError`, `SchemaError`). We map them to `InvoiceExtractionError` via `Effect.catchTag` — same error-mapping pattern, different source.
+
+## Codebase Effect Patterns
+
+### worker.ts fetch handler — layer composition + `runPromiseExit`
+
+The HTTP path builds a full layer stack per-request, then exposes `runEffect` as a typed runner:
+
+```ts
+// worker.ts:99-134
+const makeHttpRunEffect = (env: Env, request: Request) => {
+  const envLayer = makeEnvLayer(env);
+  const d1Layer = Layer.provideMerge(D1.layer, envLayer);
+  // ... compose layers ...
+  const runtimeLayer = Layer.merge(authRequestR2Layer, makeLoggerLayer(env));
+  return async <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+  ): Promise<A> => {
+    const exit = await Effect.runPromiseExit(Effect.provide(effect, runtimeLayer));
+    // ... exit handling with redirect/notFound detection ...
+  };
+};
+```
+
+Key patterns:
+- `Layer.succeedServices` + `ServiceMap.make` to inject raw env values (`worker.ts:31-39`)
+- `Layer.provideMerge` to chain dependent layers (`worker.ts:61-62, 101-110`)
+- `Layer.merge` to combine independent layers (`worker.ts:104, 114-116`)
+- `ConfigProvider.fromUnknown(env)` to expose env vars as `Config` values (`worker.ts:34-36`)
+- `Effect.runPromiseExit` + `Cause.squash` for structured error handling at the boundary (`worker.ts:120-133`)
+
+### worker.ts scheduled handler — simpler layer, `runPromise`
+
+```ts
+// worker.ts:59-67
+const makeScheduledRunEffect = (env: Env) => {
+  const envLayer = makeEnvLayer(env);
+  const d1Layer = Layer.provideMerge(D1.layer, envLayer);
+  const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
+  const runtimeLayer = Layer.merge(repositoryLayer, makeLoggerLayer(env));
+  return <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+  ) => Effect.runPromise(Effect.provide(effect, runtimeLayer));
+};
+```
+
+Simpler than HTTP: no request layer, no exit inspection, just `Effect.runPromise`. Uses `Effect.logInfo`/`Effect.logWarning` for structured logging (`worker.ts:368, 375`).
+
+### worker.ts queue handler — plain async, no Effect (future refactor)
+
+The queue handler (`worker.ts:384-410`) uses `Schema.decodeUnknownExit` for validation but otherwise is plain async/await with try/catch. Not yet Effect-ified.
+
+### Service pattern — `ServiceMap.Service` + `Effect.fn` + `try*` helper
+
+All services follow the same shape:
+
+```ts
+// D1, R2, KV, Stripe all use this pattern:
+class MyService extends ServiceMap.Service<MyService>()("MyService", {
+  make: Effect.gen(function* () {
+    const env = yield* CloudflareEnv;
+    const operation = Effect.fn("MyService.operation")(function* (...args) {
+      return yield* tryMyService(() => rawApiCall(...args));
+    });
+    return { operation };
+  }),
+}) {
+  static readonly layer = Layer.effect(this, this.make);
+}
+
+class MyServiceError extends Schema.TaggedErrorClass<MyServiceError>()(
+  "MyServiceError",
+  { message: Schema.String, cause: Schema.Defect },
+) {}
+
+const tryMyService = <A>(evaluate: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: evaluate,
+    catch: (cause) => new MyServiceError({
+      message: cause instanceof Error ? cause.message : String(cause),
+      cause,
+    }),
+  }).pipe(
+    Effect.tapError((error) => Effect.logError(error)),
+    // optional: Effect.retry(...)
+  );
+```
+
+Instances: `D1.ts`, `R2.ts`, `KV.ts`, `Stripe.ts`.
+
+### Relevance to invoice extraction
+
+The workflow runs in a **Durable Object** context (AgentWorkflow), not the main worker request path. It doesn't have access to the composed layer stack from `worker.ts`. But the same patterns apply:
+
+- `FetchHttpClient.layer` is the minimal layer needed (provides `HttpClient.HttpClient`)
+- `Effect.runPromise` at the boundary (like `makeScheduledRunEffect` — no exit inspection needed since workflow errors are handled by the Agents framework via `onWorkflowError`)
+- `Schema.TaggedErrorClass` for typed errors (same as `D1Error`, `R2Error`, etc.)
+- `Effect.tapError(Effect.logError)` for error logging before propagation
+
+## Pattern Alignment Table
+
+| Pattern | Codebase Reference | Applied Here |
 |---|---|---|
-| `HttpClient.execute` accessor | `src/lib/google-client.ts:80` | ✓ |
-| `HttpClientResponse.filterStatusOk` | `src/lib/google-client.ts:81` | ✓ |
-| `HttpClientResponse.schemaBodyJson` | `src/lib/google-client.ts:82` | ✓ |
-| `Schema.TaggedErrorClass` for errors | `src/lib/R2.ts:46-49` | ✓ |
-| `Effect.catchTag` error mapping | `src/lib/google-client.ts:83-86` | ✓ |
-| `HttpBody.jsonUnsafe` for body | `src/lib/google-client.ts:137` | ✓ |
-| `Encoding.encodeBase64` | `refs/effect4/packages/effect/src/Encoding.ts:70` | ✓ |
-| `FetchHttpClient.layer` provision | `docs/effect4-http-client-research.md:360-366` | ✓ |
+| `Schema.TaggedErrorClass` for errors | `D1Error` (`D1.ts:57`), `R2Error` (`R2.ts:46`), `StripeError` (`Stripe.ts:227`) | `InvoiceExtractionError` |
+| `Effect.tapError` + `Effect.logError` | `tryD1` (`D1.ts:79`), `tryR2` (`R2.ts:66`), `tryStripe` (`Stripe.ts:243`), `tryKV` (`KV.ts:91`) | ✓ |
+| `Effect.retry` with schedule | `tryR2` (`R2.ts:67-71`), `tryKV` (`KV.ts:92-99`), `retryIfIdempotentWrite` (`D1.ts:81-96`) | Optional — step-level retry may suffice |
+| `Effect.fn` for named spans | `D1.batch` (`D1.ts:9`), `R2.head` (`R2.ts:8`), `KV.get` (`KV.ts:21`), `Stripe.getPrices` (`Stripe.ts:32`) | Could wrap `runInvoiceExtraction` |
+| `Effect.runPromise` at boundary | `makeScheduledRunEffect` (`worker.ts:66`) | ✓ — inside `step.do` |
+| `Layer.provideMerge` / `Layer.merge` | `worker.ts:61-62, 101-116` | `FetchHttpClient.layer` via `Effect.provide` |
+| `Schema.decodeUnknownEffect` | `Repository.ts` | Gemini text → `InvoiceExtractionSchema` |
+| `HttpBody.jsonUnsafe` for body | `refs/effect4/ai-docs/src/50_http-client/10_basics.ts:79` | ✓ |
+| `FetchHttpClient.layer` provision | `refs/effect4/packages/effect/src/unstable/http/FetchHttpClient.ts:71` | ✓ |
+| `Encoding.encodeBase64` | `refs/effect4/packages/effect/src/Encoding.ts:70` | Replaces `Buffer.from().toString("base64")` |
 
 ## Imports
 
 ```ts
-import { Data, Effect } from "effect"
+import { Effect } from "effect"
 import * as Encoding from "effect/Encoding"
 import * as Schema from "effect/Schema"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -239,8 +367,8 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 
 ## Open Questions
 
-1. **Retry**: Should we add `retryTransient` for transient AI Gateway failures? The Agents workflow framework already provides retry at the step level (`step.do` is durable). Adding Effect-level retry would handle transient 5xx within a single step attempt.
+1. **Retry**: Should we add `retryTransient` for transient AI Gateway failures? The Agents workflow framework already provides retry at the step level (`step.do` is durable). Adding Effect-level retry would handle transient 5xx within a single step attempt. The codebase `R2` and `D1` services both do retry at the Effect level (`R2.ts:67-71`, `D1.ts:81-96`).
 
-2. **Logging**: Current code uses `console.log`/`console.error`. Should we use `Effect.logInfo`/`Effect.logError` inside the Effect program? Would need to provide a logger layer (the main app already has one in `worker.ts`).
+2. **Logging**: Current code uses `console.log`/`console.error`. Should we use `Effect.logInfo`/`Effect.logError` inside the Effect program? The codebase services consistently use `Effect.tapError(Effect.logError)` (`D1.ts:79`, `R2.ts:66`, `Stripe.ts:243`). Would need to provide a logger layer or rely on default console logger.
 
 3. **`load-file` step**: Worth wrapping in Effect too for consistency, or leave as plain async since it's a single R2 call?
