@@ -4,20 +4,13 @@ import { Agent, callable } from "agents";
 import { AgentWorkflow } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
-import { runGeminiInvoiceExtraction, runInvoiceExtractionViaGateway } from "@/lib/invoice-extraction";
+import { runInvoiceExtraction } from "@/lib/invoice-extraction";
 
 export interface OrganizationAgentState {
   readonly message: string;
 }
 
 interface InvoiceExtractionWorkflowParams {
-  readonly invoiceId: string;
-  readonly idempotencyKey: string;
-  readonly r2ObjectKey: string;
-  readonly fileName: string;
-}
-
-interface GeminiInvoiceExtractionWorkflowParams {
   readonly invoiceId: string;
   readonly idempotencyKey: string;
   readonly r2ObjectKey: string;
@@ -35,8 +28,6 @@ const InvoiceRowSchema = Schema.Struct({
   r2ObjectKey: Schema.String,
   status: Schema.String,
   processedAt: Schema.NullOr(Schema.Number),
-  markdown: Schema.NullOr(Schema.String),
-  markdownError: Schema.NullOr(Schema.String),
   invoiceJson: Schema.NullOr(Schema.String),
   invoiceJsonError: Schema.NullOr(Schema.String),
 });
@@ -76,8 +67,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       r2ObjectKey text not null,
       status text not null default 'uploaded',
       processedAt integer,
-      markdown text,
-      markdownError text,
       invoiceJson text,
       invoiceJsonError text
     )`;
@@ -115,10 +104,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     }
     if (
       existing?.idempotencyKey === upload.idempotencyKey &&
-      (existing.markdown !== null ||
-        existing.processedAt !== null ||
-        existing.status === "extracting_markdown" ||
-        existing.status === "extracted_markdown" ||
+      (existing.processedAt !== null ||
         existing.status === "extracting_json" ||
         existing.status === "extracting" ||
         existing.status === "ready")
@@ -129,13 +115,12 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       insert into Invoice (
         id, fileName, contentType, createdAt, eventTime,
         idempotencyKey, r2ObjectKey, status,
-        processedAt, markdown, markdownError,
-        invoiceJson, invoiceJsonError
+        processedAt, invoiceJson, invoiceJsonError
       ) values (
         ${upload.invoiceId}, ${upload.fileName}, ${upload.contentType},
         ${eventTime}, ${eventTime}, ${upload.idempotencyKey},
         ${upload.r2ObjectKey}, 'uploaded',
-        null, null, null, null, null
+        null, null, null
       )
       on conflict(id) do update set
         fileName = excluded.fileName,
@@ -145,8 +130,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
         r2ObjectKey = excluded.r2ObjectKey,
         status = 'uploaded',
         processedAt = null,
-        markdown = null,
-        markdownError = null,
         invoiceJson = null,
         invoiceJsonError = null
     `;
@@ -158,7 +141,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       }),
     );
     await this.runWorkflow(
-      "GEMINI_INVOICE_EXTRACTION_WORKFLOW",
+      "INVOICE_EXTRACTION_WORKFLOW",
       {
         invoiceId: upload.invoiceId,
         idempotencyKey: upload.idempotencyKey,
@@ -209,33 +192,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  applyInvoiceMarkdown(input: {
-    invoiceId: string;
-    idempotencyKey: string;
-    markdown: string;
-  }) {
-    const processedAt = Date.now();
-    const updated = this.sql<{ id: string; fileName: string }>`
-      update Invoice
-      set status = 'extracted_markdown',
-          processedAt = ${processedAt},
-          markdown = ${input.markdown},
-          markdownError = null
-      where id = ${input.invoiceId} and idempotencyKey = ${input.idempotencyKey}
-      returning id, fileName
-    `;
-    if (updated.length === 0) {
-      return;
-    }
-    this.broadcast(
-      JSON.stringify({
-        type: "invoice_markdown_complete",
-        invoiceId: updated[0].id,
-        fileName: updated[0].fileName,
-      }),
-    );
-  }
-
   applyInvoiceJson(input: {
     invoiceId: string;
     idempotencyKey: string;
@@ -267,19 +223,17 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     workflowId: string,
     error: string,
   ): Promise<void> {
-    if (workflowName !== "INVOICE_EXTRACTION_WORKFLOW" && workflowName !== "GEMINI_INVOICE_EXTRACTION_WORKFLOW") {
+    if (workflowName !== "INVOICE_EXTRACTION_WORKFLOW") {
       return;
     }
     const invoiceJsonError = error.startsWith(extractInvoiceJsonErrorPrefix)
       ? error.slice(extractInvoiceJsonErrorPrefix.length).trim()
-      : null;
-    const markdownError = invoiceJsonError === null ? error : null;
+      : error;
     const processedAt = Date.now();
     const updated = this.sql<{ id: string; fileName: string }>`
       update Invoice
       set status = 'extract_error',
           processedAt = ${processedAt},
-          markdownError = ${markdownError},
           invoiceJsonError = ${invoiceJsonError}
       where idempotencyKey = ${workflowId}
       returning id, fileName
@@ -318,114 +272,6 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       invoiceId: event.payload.invoiceId,
       r2ObjectKey: event.payload.r2ObjectKey,
       fileName: event.payload.fileName,
-    });
-    const pdfBytes = await step.do("load-pdf", async () => {
-      console.log("[workflow:load-pdf] fetching from R2", event.payload.r2ObjectKey);
-      const object = await this.env.R2.get(event.payload.r2ObjectKey);
-      if (!object) {
-        throw new Error(`Invoice PDF not found: ${event.payload.r2ObjectKey}`);
-      }
-      const bytes = new Uint8Array(await object.arrayBuffer());
-      console.log("[workflow:load-pdf] loaded", { bytes: bytes.byteLength });
-      return bytes;
-    });
-    const markdown = await step.do("convert-pdf-to-markdown", async () => {
-      console.log("[workflow:convert-pdf] calling AI.toMarkdown", {
-        fileName: event.payload.fileName,
-        pdfSize: pdfBytes.byteLength,
-      });
-      let result: Awaited<ReturnType<typeof this.env.AI.toMarkdown>>;
-      try {
-        result = await this.env.AI.toMarkdown(
-          {
-            name: event.payload.fileName,
-            blob: new Blob([pdfBytes], { type: "application/pdf" }),
-          },
-          { conversionOptions: { pdf: { metadata: false } } },
-        );
-      } catch (error) {
-        console.error("[workflow:convert-pdf] AI.toMarkdown threw", {
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-        throw error;
-      }
-      if (result.format === "error") {
-        console.error("[workflow:convert-pdf] error format", { error: result.error });
-        throw new Error(result.error);
-      }
-      console.log("[workflow:convert-pdf] success", {
-        format: result.format,
-        tokens: result.tokens,
-        length: result.data.length,
-      });
-      return result.data;
-    });
-    await step.do("save-markdown", async () => {
-      console.log("[workflow:save-markdown]", {
-        invoiceId: event.payload.invoiceId,
-        markdownLength: markdown.length,
-      });
-      await this.agent.applyInvoiceMarkdown({
-        invoiceId: event.payload.invoiceId,
-        idempotencyKey: event.payload.idempotencyKey,
-        markdown,
-      });
-    });
-    const invoiceJson = await step.do("extract-invoice-json", async () => {
-      console.log("[workflow:extract-json] starting extraction");
-      try {
-        const result = await runInvoiceExtractionViaGateway({
-          accountId: this.env.CF_ACCOUNT_ID,
-          gatewayId: this.env.AI_GATEWAY_ID,
-          workersAiApiToken: this.env.WORKERS_AI_API_TOKEN,
-          aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-          markdown,
-        });
-        console.log("[workflow:extract-json] success", result);
-        return result;
-      } catch (error) {
-        console.error("[workflow:extract-json] failed", {
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-        throw new Error(
-          `${extractInvoiceJsonErrorPrefix} ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-    });
-    await step.do("save-invoice-json", async () => {
-      console.log("[workflow:save-json]", {
-        invoiceId: event.payload.invoiceId,
-        invoiceJson,
-      });
-      await this.agent.applyInvoiceJson({
-        invoiceId: event.payload.invoiceId,
-        idempotencyKey: event.payload.idempotencyKey,
-        invoiceJson: JSON.stringify(invoiceJson),
-      });
-    });
-    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
-      invoiceId: event.payload.invoiceId,
-    });
-    return { invoiceId: event.payload.invoiceId };
-  }
-}
-
-export class GeminiInvoiceExtractionWorkflow extends AgentWorkflow<
-  OrganizationAgent,
-  GeminiInvoiceExtractionWorkflowParams,
-  { readonly status: string; readonly message: string }
-> {
-  async run(
-    event: AgentWorkflowEvent<GeminiInvoiceExtractionWorkflowParams>,
-    step: AgentWorkflowStep,
-  ) {
-    console.log("[workflow] GEMINI_INVOICE_EXTRACTION_WORKFLOW started", {
-      invoiceId: event.payload.invoiceId,
-      r2ObjectKey: event.payload.r2ObjectKey,
-      fileName: event.payload.fileName,
       contentType: event.payload.contentType,
     });
     const fileBytes = await step.do("load-file", async () => {
@@ -439,9 +285,9 @@ export class GeminiInvoiceExtractionWorkflow extends AgentWorkflow<
       return bytes;
     });
     const invoiceJson = await step.do("extract-invoice", async () => {
-      console.log("[workflow:extract-invoice] starting Gemini extraction");
+      console.log("[workflow:extract-invoice] starting extraction");
       try {
-        const result = await runGeminiInvoiceExtraction({
+        const result = await runInvoiceExtraction({
           accountId: this.env.CF_ACCOUNT_ID,
           gatewayId: this.env.AI_GATEWAY_ID,
           googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
@@ -473,7 +319,7 @@ export class GeminiInvoiceExtractionWorkflow extends AgentWorkflow<
         invoiceJson: JSON.stringify(invoiceJson),
       });
     });
-    console.log("[workflow] GEMINI_INVOICE_EXTRACTION_WORKFLOW complete", {
+    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
       invoiceId: event.payload.invoiceId,
     });
     return { invoiceId: event.payload.invoiceId };

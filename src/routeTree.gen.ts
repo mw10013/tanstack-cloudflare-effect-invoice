@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as MagicLinkRouteImport } from './routes/magic-link'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/app'
-import { Route as AiDirectRouteImport } from './routes/ai-direct'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as MktRouteImport } from './routes/_mkt'
 import { Route as AppIndexRouteImport } from './routes/app.index'
@@ -47,11 +46,6 @@ const LoginRoute = LoginRouteImport.update({
 const AppRoute = AppRouteImport.update({
   id: '/app',
   path: '/app',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AiDirectRoute = AiDirectRouteImport.update({
-  id: '/ai-direct',
-  path: '/ai-direct',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
@@ -162,7 +156,6 @@ const ApiE2eDeleteUserEmailRoute = ApiE2eDeleteUserEmailRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof MktIndexRoute
   '/admin': typeof AdminRouteWithChildren
-  '/ai-direct': typeof AiDirectRoute
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/magic-link': typeof MagicLinkRoute
@@ -185,7 +178,6 @@ export interface FileRoutesByFullPath {
   '/api/org/$organizationId/invoice/$invoiceId': typeof ApiOrgOrganizationIdInvoiceInvoiceIdRoute
 }
 export interface FileRoutesByTo {
-  '/ai-direct': typeof AiDirectRoute
   '/login': typeof LoginRoute
   '/magic-link': typeof MagicLinkRoute
   '/pricing': typeof MktPricingRoute
@@ -210,7 +202,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_mkt': typeof MktRouteWithChildren
   '/admin': typeof AdminRouteWithChildren
-  '/ai-direct': typeof AiDirectRoute
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
   '/magic-link': typeof MagicLinkRoute
@@ -238,7 +229,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
-    | '/ai-direct'
     | '/app'
     | '/login'
     | '/magic-link'
@@ -261,7 +251,6 @@ export interface FileRouteTypes {
     | '/api/org/$organizationId/invoice/$invoiceId'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/ai-direct'
     | '/login'
     | '/magic-link'
     | '/pricing'
@@ -285,7 +274,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_mkt'
     | '/admin'
-    | '/ai-direct'
     | '/app'
     | '/login'
     | '/magic-link'
@@ -312,7 +300,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   MktRoute: typeof MktRouteWithChildren
   AdminRoute: typeof AdminRouteWithChildren
-  AiDirectRoute: typeof AiDirectRoute
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
   MagicLinkRoute: typeof MagicLinkRoute
@@ -342,13 +329,6 @@ declare module '@tanstack/react-router' {
       path: '/app'
       fullPath: '/app'
       preLoaderRoute: typeof AppRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/ai-direct': {
-      id: '/ai-direct'
-      path: '/ai-direct'
-      fullPath: '/ai-direct'
-      preLoaderRoute: typeof AiDirectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin': {
@@ -560,7 +540,6 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   MktRoute: MktRouteWithChildren,
   AdminRoute: AdminRouteWithChildren,
-  AiDirectRoute: AiDirectRoute,
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
   MagicLinkRoute: MagicLinkRoute,

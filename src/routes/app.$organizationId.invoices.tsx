@@ -72,8 +72,6 @@ const invoiceMessageSchema = Schema.Struct({
     "invoice_uploaded",
     "invoice_deleted",
     "invoice_extraction_started",
-    "invoice_markdown_complete",
-    "invoice_json_started",
     "invoice_extraction_complete",
     "invoice_extraction_error",
   ]),
@@ -86,18 +84,6 @@ const getStatusVariant = (
   if (status === "extract_error") return "destructive";
   return "secondary";
 };
-
-const getMarkdownSizeLabel = (invoice: {
-  readonly markdown: string | null;
-  readonly status: string;
-  readonly contentType: string;
-}): string => {
-  if (invoice.markdown) return `${String(Math.round(invoice.markdown.length / 1024))} KB`;
-  if (invoice.contentType !== "application/pdf") return "Skipped";
-  if (invoice.status === "extract_error") return "Error";
-  return "Pending";
-};
-
 
 const getInvoices = createServerFn({ method: "GET" })
   .inputValidator(Schema.toStandardSchemaV1(organizationIdSchema))
@@ -252,13 +238,11 @@ function RouteComponent() {
   const [selectedInvoiceId, setSelectedInvoiceId] = React.useState<string | null>(
     null,
   );
-  const [copiedField, setCopiedField] = React.useState<"markdown" | "json" | null>(
-    null,
-  );
+  const [copiedField, setCopiedField] = React.useState<"json" | null>(null);
   const selectedInvoice =
     invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
 
-  const copyText = React.useCallback(async (value: string, field: "markdown" | "json") => {
+  const copyText = React.useCallback(async (value: string, field: "json") => {
     await navigator.clipboard.writeText(value);
     setCopiedField(field);
     setTimeout(() => {
@@ -320,32 +304,9 @@ function RouteComponent() {
             <AlertCircle className="size-4" />
             <AlertTitle>Extraction failed</AlertTitle>
             <AlertDescription>
-              {selectedInvoice.markdownError ?? selectedInvoice.invoiceJsonError ?? "Unknown extraction error"}
+              {selectedInvoice.invoiceJsonError ?? "Unknown extraction error"}
             </AlertDescription>
           </Alert>
-        )}
-        {selectedInvoice.markdown && (
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <h4 className="text-sm font-medium">Markdown</h4>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectedInvoice.markdown) {
-                    void copyText(selectedInvoice.markdown, "markdown");
-                  }
-                }}
-              >
-                <Copy className="size-4" />
-                {copiedField === "markdown" ? "Copied" : "Copy Markdown"}
-              </Button>
-            </div>
-            <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
-              {selectedInvoice.markdown}
-            </pre>
-          </div>
         )}
         {selectedInvoice.invoiceJson && (
           <div>
@@ -370,7 +331,7 @@ function RouteComponent() {
             </pre>
           </div>
         )}
-        {!selectedInvoice.markdown && !selectedInvoice.invoiceJson && (
+        {!selectedInvoice.invoiceJson && (
           <p className="text-sm text-muted-foreground">Extraction in progress.</p>
         )}
       </div>
@@ -382,7 +343,7 @@ function RouteComponent() {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">Invoices</h1>
         <p className="text-sm text-muted-foreground">
-          Upload invoices and inspect extracted markdown and JSON output.
+          Upload invoices and inspect extracted JSON output.
         </p>
       </header>
 
@@ -444,13 +405,12 @@ function RouteComponent() {
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow>
-                    <TableHead>File</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Uploaded</TableHead>
-                    <TableHead>Markdown</TableHead>
-                    <TableHead className="w-35" />
-                  </TableRow>
+                    <TableRow>
+                      <TableHead>File</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Uploaded</TableHead>
+                      <TableHead className="w-35" />
+                    </TableRow>
                 </TableHeader>
                 <TableBody>
                   {invoices.map((invoice) => (
@@ -473,9 +433,6 @@ function RouteComponent() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {new Date(invoice.createdAt).toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {getMarkdownSizeLabel(invoice)}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">

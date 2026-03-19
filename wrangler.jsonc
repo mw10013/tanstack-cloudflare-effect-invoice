@@ -46,11 +46,6 @@
       "name": "invoice-extraction-workflow",
       "binding": "INVOICE_EXTRACTION_WORKFLOW",
       "class_name": "InvoiceExtractionWorkflow"
-    },
-    {
-      "name": "gemini-invoice-extraction-workflow",
-      "binding": "GEMINI_INVOICE_EXTRACTION_WORKFLOW",
-      "class_name": "GeminiInvoiceExtractionWorkflow"
     }
   ],
   "d1_databases": [
