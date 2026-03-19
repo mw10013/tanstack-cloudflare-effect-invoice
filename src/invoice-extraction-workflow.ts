@@ -112,19 +112,11 @@ const runInvoiceExtraction = async ({
       `AI Gateway Response ${String(response.status)}: ${JSON.stringify(body)}`,
     );
   }
-  try {
     const decoded = Schema.decodeUnknownSync(
       Schema.fromJsonString(InvoiceExtractionSchema),
     )(decodeGeminiResponse(body).candidates[0].content.parts[0].text);
     console.log("[invoice-extraction] decoded", decoded);
     return decoded;
-  } catch (error) {
-    console.error("[invoice-extraction] gemini decode failed", {
-      raw: JSON.stringify(body),
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
 };
 
 interface InvoiceExtractionWorkflowParams {
