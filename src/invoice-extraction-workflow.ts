@@ -46,6 +46,67 @@ Rules:
 - For line items, include every line item found. Set quantity, unitPrice, or amount to empty string "" if not clearly stated for that item.
 - For addresses, concatenate all address components into a single string (e.g., "101 Townsend Street, San Francisco, California 94107, United States"). Set to empty string "" if no address is found.`;
 
+interface InvoiceExtractionWorkflowParams {
+  readonly invoiceId: string;
+  readonly idempotencyKey: string;
+  readonly r2ObjectKey: string;
+  readonly fileName: string;
+  readonly contentType: string;
+}
+
+export class InvoiceExtractionWorkflow extends AgentWorkflow<
+  OrganizationAgent,
+  InvoiceExtractionWorkflowParams,
+  { readonly status: string; readonly message: string }
+> {
+  async run(
+    event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
+    step: AgentWorkflowStep,
+  ) {
+    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW started", {
+      invoiceId: event.payload.invoiceId,
+      r2ObjectKey: event.payload.r2ObjectKey,
+      fileName: event.payload.fileName,
+      contentType: event.payload.contentType,
+    });
+    const fileBytes = await step.do("load-file", async () => {
+      console.log(
+        "[workflow:load-file] fetching from R2",
+        event.payload.r2ObjectKey,
+      );
+      const object = await this.env.R2.get(event.payload.r2ObjectKey);
+      if (!object) {
+        throw new Error(`Invoice file not found: ${event.payload.r2ObjectKey}`);
+      }
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      console.log("[workflow:load-file] loaded", { bytes: bytes.byteLength });
+      return bytes;
+    });
+    const extractedJson = await step.do("extract-invoice", async () => {
+      const result = await runInvoiceExtraction({
+        accountId: this.env.CF_ACCOUNT_ID,
+        gatewayId: this.env.AI_GATEWAY_ID,
+        googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
+        aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
+        fileBytes,
+        contentType: event.payload.contentType,
+      });
+      return result;
+    });
+    await step.do("save-extracted-json", async () => {
+      await this.agent.saveExtractedJson({
+        invoiceId: event.payload.invoiceId,
+        idempotencyKey: event.payload.idempotencyKey,
+        extractedJson: JSON.stringify(extractedJson),
+      });
+    });
+    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
+      invoiceId: event.payload.invoiceId,
+    });
+    return { invoiceId: event.payload.invoiceId };
+  }
+}
+
 const decodeGeminiResponse = Schema.decodeUnknownSync(
   Schema.Struct({
     candidates: Schema.NonEmptyArray(
@@ -119,63 +180,4 @@ const runInvoiceExtraction = async ({
     return decoded;
 };
 
-interface InvoiceExtractionWorkflowParams {
-  readonly invoiceId: string;
-  readonly idempotencyKey: string;
-  readonly r2ObjectKey: string;
-  readonly fileName: string;
-  readonly contentType: string;
-}
 
-export class InvoiceExtractionWorkflow extends AgentWorkflow<
-  OrganizationAgent,
-  InvoiceExtractionWorkflowParams,
-  { readonly status: string; readonly message: string }
-> {
-  async run(
-    event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
-    step: AgentWorkflowStep,
-  ) {
-    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW started", {
-      invoiceId: event.payload.invoiceId,
-      r2ObjectKey: event.payload.r2ObjectKey,
-      fileName: event.payload.fileName,
-      contentType: event.payload.contentType,
-    });
-    const fileBytes = await step.do("load-file", async () => {
-      console.log(
-        "[workflow:load-file] fetching from R2",
-        event.payload.r2ObjectKey,
-      );
-      const object = await this.env.R2.get(event.payload.r2ObjectKey);
-      if (!object) {
-        throw new Error(`Invoice file not found: ${event.payload.r2ObjectKey}`);
-      }
-      const bytes = new Uint8Array(await object.arrayBuffer());
-      console.log("[workflow:load-file] loaded", { bytes: bytes.byteLength });
-      return bytes;
-    });
-    const extractedJson = await step.do("extract-invoice", async () => {
-      const result = await runInvoiceExtraction({
-        accountId: this.env.CF_ACCOUNT_ID,
-        gatewayId: this.env.AI_GATEWAY_ID,
-        googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
-        aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-        fileBytes,
-        contentType: event.payload.contentType,
-      });
-      return result;
-    });
-    await step.do("save-extracted-json", async () => {
-      await this.agent.saveExtractedJson({
-        invoiceId: event.payload.invoiceId,
-        idempotencyKey: event.payload.idempotencyKey,
-        extractedJson: JSON.stringify(extractedJson),
-      });
-    });
-    console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
-      invoiceId: event.payload.invoiceId,
-    });
-    return { invoiceId: event.payload.invoiceId };
-  }
-}
