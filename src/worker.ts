@@ -25,7 +25,8 @@ import { Request as AppRequest } from "@/lib/Request";
 import { Stripe } from "@/lib/Stripe";
 import { extractAgentInstanceName } from "./organization-agent";
 
-export { InvoiceExtractionWorkflow, OrganizationAgent } from "./organization-agent";
+export { InvoiceExtractionWorkflow } from "./invoice-extraction-workflow";
+export { OrganizationAgent } from "./organization-agent";
 
 const makeEnvLayer = (env: Env) =>
   Layer.succeedServices(
