@@ -222,7 +222,7 @@ const handleInvoiceDelete = async ({
     const stub = await getOrganizationAgentStub(env, parsed.organizationId);
     await stub.onInvoiceDelete({
       invoiceId: parsed.invoiceId,
-      eventTime: notification.eventTime,
+      r2ActionTime: notification.eventTime,
       r2ObjectKey: notification.object.key,
     });
     message.ack();
@@ -278,7 +278,7 @@ const handleInvoiceUpload = async ({
     const stub = await getOrganizationAgentStub(env, organizationId);
     await stub.onInvoiceUpload({
       invoiceId,
-      eventTime: notification.eventTime,
+      r2ActionTime: notification.eventTime,
       idempotencyKey,
       r2ObjectKey: notification.object.key,
       fileName: fileName ?? "unknown",

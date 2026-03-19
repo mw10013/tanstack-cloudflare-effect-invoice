@@ -1,6 +1,8 @@
 import { Agent, callable } from "agents";
 import * as Schema from "effect/Schema";
 
+import { InvoiceStatus } from "@/lib/Domain";
+
 export interface OrganizationAgentState {
   readonly message: string;
 }
@@ -10,16 +12,13 @@ const InvoiceRowSchema = Schema.Struct({
   fileName: Schema.String,
   contentType: Schema.String,
   createdAt: Schema.Number,
-  eventTime: Schema.Number,
+  r2ActionTime: Schema.Number,
   idempotencyKey: Schema.String,
   r2ObjectKey: Schema.String,
-  status: Schema.String,
-  processedAt: Schema.NullOr(Schema.Number),
-  invoiceJson: Schema.NullOr(Schema.String),
-  invoiceJsonError: Schema.NullOr(Schema.String),
+  status: InvoiceStatus,
+  extractedJson: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
 });
-
-export const extractInvoiceJsonErrorPrefix = "extract-invoice-json:";
 
 const activeWorkflowStatuses = new Set(["queued", "running", "waiting"]);
 type InvoiceRow = typeof InvoiceRowSchema.Type;
@@ -49,13 +48,12 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       fileName text not null,
       contentType text not null,
       createdAt integer not null,
-      eventTime integer not null,
+      r2ActionTime integer not null,
       idempotencyKey text not null unique,
       r2ObjectKey text not null,
-      status text not null default 'uploaded',
-      processedAt integer,
-      invoiceJson text,
-      invoiceJsonError text
+      status text not null,
+      extractedJson text,
+      error text
     )`;
   }
 
@@ -67,22 +65,22 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   @callable()
   async onInvoiceUpload(upload: {
     invoiceId: string;
-    eventTime: string;
+    r2ActionTime: string;
     idempotencyKey: string;
     r2ObjectKey: string;
     fileName: string;
     contentType: string;
   }) {
-    const eventTime = Date.parse(upload.eventTime);
-    if (!Number.isFinite(eventTime)) {
-      throw new TypeError(`Invalid eventTime: ${upload.eventTime}`);
+    const r2ActionTime = Date.parse(upload.r2ActionTime);
+    if (!Number.isFinite(r2ActionTime)) {
+      throw new TypeError(`Invalid r2ActionTime: ${upload.r2ActionTime}`);
     }
     const existing = decodeInvoiceRow(
       this
         .sql<InvoiceRow>`select * from Invoice where id = ${upload.invoiceId}`[0] ??
         null,
     );
-    if (existing && eventTime < existing.eventTime) {
+    if (existing && r2ActionTime < existing.r2ActionTime) {
       return;
     }
     const trackedWorkflow = this.getWorkflow(upload.idempotencyKey);
@@ -91,34 +89,31 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     }
     if (
       existing?.idempotencyKey === upload.idempotencyKey &&
-      (existing.processedAt !== null ||
-        existing.status === "extracting_json" ||
-        existing.status === "extracting" ||
-        existing.status === "ready")
+      (existing.status === "extracting" ||
+        existing.status === "extracted")
     ) {
       return;
     }
     void this.sql`
       insert into Invoice (
-        id, fileName, contentType, createdAt, eventTime,
+        id, fileName, contentType, createdAt, r2ActionTime,
         idempotencyKey, r2ObjectKey, status,
-        processedAt, invoiceJson, invoiceJsonError
+        extractedJson, error
       ) values (
         ${upload.invoiceId}, ${upload.fileName}, ${upload.contentType},
-        ${eventTime}, ${eventTime}, ${upload.idempotencyKey},
+        ${r2ActionTime}, ${r2ActionTime}, ${upload.idempotencyKey},
         ${upload.r2ObjectKey}, 'uploaded',
-        null, null, null
+        null, null
       )
       on conflict(id) do update set
         fileName = excluded.fileName,
         contentType = excluded.contentType,
-        eventTime = excluded.eventTime,
+        r2ActionTime = excluded.r2ActionTime,
         idempotencyKey = excluded.idempotencyKey,
         r2ObjectKey = excluded.r2ObjectKey,
         status = 'uploaded',
-        processedAt = null,
-        invoiceJson = null,
-        invoiceJsonError = null
+        extractedJson = null,
+        error = null
     `;
     this.broadcast(
       JSON.stringify({
@@ -158,16 +153,16 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   @callable()
   onInvoiceDelete(input: {
     invoiceId: string;
-    eventTime: string;
+    r2ActionTime: string;
     r2ObjectKey: string;
   }) {
-    const eventTime = Date.parse(input.eventTime);
-    if (!Number.isFinite(eventTime)) {
-      throw new TypeError(`Invalid eventTime: ${input.eventTime}`);
+    const r2ActionTime = Date.parse(input.r2ActionTime);
+    if (!Number.isFinite(r2ActionTime)) {
+      throw new TypeError(`Invalid r2ActionTime: ${input.r2ActionTime}`);
     }
     const deleted = this.sql<{ id: string }>`
       delete from Invoice
-      where id = ${input.invoiceId} and eventTime <= ${eventTime}
+      where id = ${input.invoiceId} and r2ActionTime <= ${r2ActionTime}
       returning id
     `;
     if (deleted.length === 0) return;
@@ -179,18 +174,16 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  applyInvoiceJson(input: {
+  saveExtractedJson(input: {
     invoiceId: string;
     idempotencyKey: string;
-    invoiceJson: string;
+    extractedJson: string;
   }) {
-    const processedAt = Date.now();
     const updated = this.sql<{ id: string; fileName: string }>`
       update Invoice
-      set status = 'ready',
-          processedAt = ${processedAt},
-          invoiceJson = ${input.invoiceJson},
-          invoiceJsonError = null
+      set status = 'extracted',
+          extractedJson = ${input.extractedJson},
+          error = null
       where id = ${input.invoiceId} and idempotencyKey = ${input.idempotencyKey}
       returning id, fileName
     `;
@@ -213,15 +206,10 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     if (workflowName !== "INVOICE_EXTRACTION_WORKFLOW") {
       return;
     }
-    const invoiceJsonError = error.startsWith(extractInvoiceJsonErrorPrefix)
-      ? error.slice(extractInvoiceJsonErrorPrefix.length).trim()
-      : error;
-    const processedAt = Date.now();
     const updated = this.sql<{ id: string; fileName: string }>`
       update Invoice
-      set status = 'extract_error',
-          processedAt = ${processedAt},
-          invoiceJsonError = ${invoiceJsonError}
+      set status = 'error',
+          error = ${error}
       where idempotencyKey = ${workflowId}
       returning id, fileName
     `;

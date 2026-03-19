@@ -80,8 +80,8 @@ const invoiceMessageSchema = Schema.Struct({
 const getStatusVariant = (
   status: string,
 ): "default" | "destructive" | "secondary" => {
-  if (status === "ready") return "default";
-  if (status === "extract_error") return "destructive";
+  if (status === "extracted") return "default";
+  if (status === "error") return "destructive";
   return "secondary";
 };
 
@@ -299,16 +299,16 @@ function RouteComponent() {
     }
     return (
       <div className="flex flex-col gap-4">
-        {selectedInvoice.status === "extract_error" && (
+        {selectedInvoice.status === "error" && (
           <Alert variant="destructive">
             <AlertCircle className="size-4" />
             <AlertTitle>Extraction failed</AlertTitle>
             <AlertDescription>
-              {selectedInvoice.invoiceJsonError ?? "Unknown extraction error"}
+              {selectedInvoice.error ?? "Unknown extraction error"}
             </AlertDescription>
           </Alert>
         )}
-        {selectedInvoice.invoiceJson && (
+        {selectedInvoice.extractedJson && (
           <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <h4 className="text-sm font-medium">Extracted JSON</h4>
@@ -317,8 +317,8 @@ function RouteComponent() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  if (selectedInvoice.invoiceJson) {
-                    void copyText(selectedInvoice.invoiceJson, "json");
+                  if (selectedInvoice.extractedJson) {
+                    void copyText(selectedInvoice.extractedJson, "json");
                   }
                 }}
               >
@@ -327,11 +327,11 @@ function RouteComponent() {
               </Button>
             </div>
             <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
-              {JSON.stringify(JSON.parse(selectedInvoice.invoiceJson), null, 2)}
+              {JSON.stringify(JSON.parse(selectedInvoice.extractedJson), null, 2)}
             </pre>
           </div>
         )}
-        {!selectedInvoice.invoiceJson && (
+        {!selectedInvoice.extractedJson && (
           <p className="text-sm text-muted-foreground">Extraction in progress.</p>
         )}
       </div>

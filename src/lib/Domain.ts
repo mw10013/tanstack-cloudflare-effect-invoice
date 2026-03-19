@@ -74,6 +74,15 @@ export const SubscriptionStatusValues = [
 export const SubscriptionStatus = Schema.Literals(SubscriptionStatusValues);
 export type SubscriptionStatus = typeof SubscriptionStatus.Type;
 
+export const InvoiceStatusValues = [
+  "uploaded",
+  "extracting",
+  "extracted",
+  "error",
+] as const;
+export const InvoiceStatus = Schema.Literals(InvoiceStatusValues);
+export type InvoiceStatus = typeof InvoiceStatus.Type;
+
 export const Invitation = Schema.Struct({
   id: Schema.String,
   email: emailSchema,

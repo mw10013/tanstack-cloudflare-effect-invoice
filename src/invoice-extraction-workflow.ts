@@ -5,8 +5,6 @@ import type { OrganizationAgent } from "./organization-agent";
 import { AgentWorkflow } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
-import { extractInvoiceJsonErrorPrefix } from "./organization-agent";
-
 const LineItemSchema = Schema.Struct({
   description: Schema.String,
   quantity: Schema.String,
@@ -176,33 +174,22 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       console.log("[workflow:load-file] loaded", { bytes: bytes.byteLength });
       return bytes;
     });
-    const invoiceJson = await step.do("extract-invoice", async () => {
-      try {
-        const result = await runInvoiceExtraction({
-          accountId: this.env.CF_ACCOUNT_ID,
-          gatewayId: this.env.AI_GATEWAY_ID,
-          googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
-          aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
-          fileBytes,
-          contentType: event.payload.contentType,
-        });
-        return result;
-      } catch (error) {
-        console.error("[workflow:extract-invoice] failed", {
-          error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-        throw new Error(
-          `${extractInvoiceJsonErrorPrefix} ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
+    const extractedJson = await step.do("extract-invoice", async () => {
+      const result = await runInvoiceExtraction({
+        accountId: this.env.CF_ACCOUNT_ID,
+        gatewayId: this.env.AI_GATEWAY_ID,
+        googleAiStudioApiKey: this.env.GOOGLE_AI_STUDIO_API_KEY,
+        aiGatewayToken: this.env.AI_GATEWAY_TOKEN,
+        fileBytes,
+        contentType: event.payload.contentType,
+      });
+      return result;
     });
-    await step.do("save-invoice-json", async () => {
-      await this.agent.applyInvoiceJson({
+    await step.do("save-extracted-json", async () => {
+      await this.agent.saveExtractedJson({
         invoiceId: event.payload.invoiceId,
         idempotencyKey: event.payload.idempotencyKey,
-        invoiceJson: JSON.stringify(invoiceJson),
+        extractedJson: JSON.stringify(extractedJson),
       });
     });
     console.log("[workflow] INVOICE_EXTRACTION_WORKFLOW complete", {
