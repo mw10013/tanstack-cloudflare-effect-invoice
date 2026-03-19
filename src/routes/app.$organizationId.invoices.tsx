@@ -313,13 +313,6 @@ function RouteComponent() {
     if (selectedInvoice === null) {
       return <p className="text-sm text-muted-foreground">No invoice selected.</p>;
     }
-    if (selectedInvoice.contentType !== "application/pdf") {
-      return (
-        <p className="text-sm text-muted-foreground">
-          Extraction currently runs only for PDF invoices.
-        </p>
-      );
-    }
     return (
       <div className="flex flex-col gap-4">
         {selectedInvoice.status === "extract_error" && (
@@ -389,7 +382,7 @@ function RouteComponent() {
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-bold tracking-tight">Invoices</h1>
         <p className="text-sm text-muted-foreground">
-          Upload invoices and inspect extracted markdown debugging output for PDFs.
+          Upload invoices and inspect extracted markdown and JSON output.
         </p>
       </header>
 
@@ -400,7 +393,7 @@ function RouteComponent() {
             Upload Invoice
           </CardTitle>
           <CardDescription>
-            Select a PDF or image invoice up to 10MB. Extraction currently runs for PDFs only.
+            Select a PDF or image invoice up to 10MB.
           </CardDescription>
         </CardHeader>
         <CardContent>
