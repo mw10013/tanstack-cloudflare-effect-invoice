@@ -1,9 +1,10 @@
 import type { AgentWorkflowEvent, AgentWorkflowStep } from "agents/workflows";
 
+import type { OrganizationAgent } from "./organization-agent";
+
 import { AgentWorkflow } from "agents/workflows";
 import * as Schema from "effect/Schema";
 
-import type { OrganizationAgent } from "./organization-agent";
 import { extractInvoiceJsonErrorPrefix } from "./organization-agent";
 
 const LineItemSchema = Schema.Struct({
@@ -44,10 +45,6 @@ const decodeInvoiceExtractionFromJsonString = Schema.decodeUnknownSync(
 export const InvoiceExtractionJsonSchema = Schema.toJsonSchemaDocument(
   InvoiceExtractionSchema,
 ).schema;
-
-const GEMINI_REQUEST_TIMEOUT_MS = 300_000;
-
-export const INVOICE_EXTRACTION_MODEL = "gemini-2.5-flash";
 
 const invoiceExtractionPrompt = `You are an invoice data extraction assistant. You will receive a document (PDF or image).
 
@@ -91,13 +88,6 @@ const runInvoiceExtraction = async ({
   readonly contentType: string;
 }) => {
   const url = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/google-ai-studio/v1beta/models/gemini-2.5-flash:generateContent`;
-  console.log("[invoice-extraction] starting gemini via gateway", {
-    url,
-    timeoutMs: GEMINI_REQUEST_TIMEOUT_MS,
-    contentType,
-    isPng: contentType === "image/png",
-    fileBytesLength: fileBytes.length,
-  });
   const startedAt = Date.now();
   const response = await fetch(url, {
     method: "POST",
@@ -105,7 +95,6 @@ const runInvoiceExtraction = async ({
       "Content-Type": "application/json",
       "x-goog-api-key": googleAiStudioApiKey,
       "cf-aig-authorization": `Bearer ${aiGatewayToken}`,
-      "cf-aig-request-timeout": String(GEMINI_REQUEST_TIMEOUT_MS),
     },
     body: JSON.stringify({
       contents: [
@@ -182,7 +171,10 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       contentType: event.payload.contentType,
     });
     const fileBytes = await step.do("load-file", async () => {
-      console.log("[workflow:load-file] fetching from R2", event.payload.r2ObjectKey);
+      console.log(
+        "[workflow:load-file] fetching from R2",
+        event.payload.r2ObjectKey,
+      );
       const object = await this.env.R2.get(event.payload.r2ObjectKey);
       if (!object) {
         throw new Error(`Invoice file not found: ${event.payload.r2ObjectKey}`);
