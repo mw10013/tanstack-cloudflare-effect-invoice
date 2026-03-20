@@ -66,6 +66,15 @@ const makeScheduledRunEffect = (env: Env) => {
   ) => Effect.runPromise(Effect.provide(effect, runtimeLayer));
 };
 
+const makeQueueRunEffect = (env: Env) => {
+  const envLayer = makeEnvLayer(env);
+  const r2Layer = Layer.provideMerge(R2.layer, envLayer);
+  const runtimeLayer = Layer.merge(r2Layer, makeLoggerLayer(env));
+  return <A, E>(
+    effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
+  ) => Effect.runPromiseExit(Effect.provide(effect, runtimeLayer));
+};
+
 /**
  * Runs an HTTP Effect within the app layer, converting failures to throwable
  * values compatible with TanStack Start's server function error serialization.
@@ -185,117 +194,82 @@ const parseInvoiceObjectKey = (key: string) => {
   return { organizationId, invoiceId };
 };
 
-const formatQueueError = (error: unknown) =>
-  error instanceof Error
-    ? `${error.name}: ${error.message}\n${error.stack ?? ""}`
-    : String(error);
+// Queue handlers create stubs directly. Unlike routeAgentRequest(), that path
+// does not populate the Agents SDK instance name, so name-dependent features
+// like workflows can throw until we set it explicitly. See
+// https://github.com/cloudflare/workerd/issues/2240.
+const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
+  function* (organizationId: string) {
+    const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
+    const id = ORGANIZATION_AGENT.idFromName(organizationId);
+    const stub = ORGANIZATION_AGENT.get(id);
+    yield* Effect.tryPromise(() => stub.setName(organizationId));
+    return stub;
+  },
+);
 
-const getOrganizationAgentStub = async (env: Env, organizationId: string) => {
-  const id = env.ORGANIZATION_AGENT.idFromName(organizationId);
-  const stub = env.ORGANIZATION_AGENT.get(id);
-  // Queue handlers create stubs directly. Unlike routeAgentRequest(), that path
-  // does not populate the Agents SDK instance name, so name-dependent features
-  // like workflows can throw until we set it explicitly. See
-  // https://github.com/cloudflare/workerd/issues/2240.
-  await stub.setName(organizationId);
-  return stub;
-};
-
-const handleInvoiceDelete = async ({
-  env,
-  message,
-  notification,
-}: {
-  env: Env;
-  message: MessageBatch["messages"][number];
-  notification: typeof r2QueueMessageSchema.Type;
-}) => {
+const processInvoiceDelete = Effect.fn("processInvoiceDelete")(function* (
+  notification: typeof r2QueueMessageSchema.Type,
+) {
   const parsed = parseInvoiceObjectKey(notification.object.key);
   if (!parsed) {
-    console.error("Invalid invoice delete object key:", {
+    yield* Effect.logError("Invalid invoice delete object key", {
       key: notification.object.key,
     });
-    message.ack();
     return;
   }
-  try {
-    const stub = await getOrganizationAgentStub(env, parsed.organizationId);
-    await stub.onInvoiceDelete({
+  const stub = yield* getOrganizationAgentStub(parsed.organizationId);
+  yield* Effect.tryPromise(() =>
+    stub.onInvoiceDelete({
       invoiceId: parsed.invoiceId,
       r2ActionTime: notification.eventTime,
       r2ObjectKey: notification.object.key,
-    });
-    message.ack();
-  } catch (error) {
-    console.error("queue onInvoiceDelete failed", {
-      key: notification.object.key,
-      organizationId: parsed.organizationId,
-      invoiceId: parsed.invoiceId,
-      error: formatQueueError(error),
-    });
-    message.retry();
-  }
-};
-
-const handleInvoiceUpload = async ({
-  env,
-  message,
-  notification,
-}: {
-  env: Env;
-  message: MessageBatch["messages"][number];
-  notification: typeof r2QueueMessageSchema.Type;
-}) => {
-  const head = await env.R2.head(notification.object.key);
-  if (!head) {
-    console.warn(
-      "R2 object deleted before notification processed:",
-      notification.object.key,
-    );
-    message.ack();
-    return;
-  }
-  const metadataResult = Schema.decodeUnknownExit(r2ObjectCustomMetadataSchema)(
-    head.customMetadata ?? {},
+    }),
   );
-  if (Exit.isFailure(metadataResult)) {
-    console.error("Invalid customMetadata on R2 object:", {
-      key: notification.object.key,
-      cause: String(metadataResult.cause),
-      customMetadata: head.customMetadata,
-    });
-    message.ack();
+});
+
+const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
+  notification: typeof r2QueueMessageSchema.Type,
+) {
+  const r2 = yield* R2;
+  const head = yield* r2.head(notification.object.key);
+  if (Option.isNone(head)) {
+    yield* Effect.logWarning(
+      "R2 object deleted before notification processed",
+      { key: notification.object.key },
+    );
     return;
   }
-  const {
-    organizationId,
-    invoiceId,
-    idempotencyKey,
-    fileName,
-    contentType,
-  } = metadataResult.value;
-  try {
-    const stub = await getOrganizationAgentStub(env, organizationId);
-    await stub.onInvoiceUpload({
-      invoiceId,
+  const metadata = yield* Schema.decodeUnknownEffect(
+    r2ObjectCustomMetadataSchema,
+  )(head.value.customMetadata ?? {});
+  const stub = yield* getOrganizationAgentStub(metadata.organizationId);
+  yield* Effect.tryPromise(() =>
+    stub.onInvoiceUpload({
+      invoiceId: metadata.invoiceId,
       r2ActionTime: notification.eventTime,
-      idempotencyKey,
+      idempotencyKey: metadata.idempotencyKey,
       r2ObjectKey: notification.object.key,
-      fileName: fileName ?? "unknown",
-      contentType: contentType ?? "application/octet-stream",
-    });
-    message.ack();
-  } catch (error) {
-    console.error("queue onInvoiceUpload failed", {
-      key: notification.object.key,
-      organizationId,
-      invoiceId,
-      idempotencyKey,
-      error: formatQueueError(error),
-    });
-    message.retry();
-  }
-};
+      fileName: metadata.fileName ?? "unknown",
+      contentType: metadata.contentType ?? "application/octet-stream",
+    }),
+  );
+});
+
+const processQueueMessage = Effect.fn("processQueueMessage")(function* (
+  messageBody: unknown,
+) {
+  const notification =
+    yield* Schema.decodeUnknownEffect(r2QueueMessageSchema)(messageBody);
+  if (
+    notification.action !== "PutObject" &&
+    notification.action !== "DeleteObject"
+  )
+    return;
+  yield* notification.action === "DeleteObject"
+    ? processInvoiceDelete(notification)
+    : processInvoiceUpload(notification);
+});
 
 export default {
   async fetch(request, env, _ctx) {
@@ -382,28 +356,17 @@ export default {
   },
 
   async queue(batch, env) {
+    const runEffect = makeQueueRunEffect(env);
     for (const message of batch.messages) {
-      const result = Schema.decodeUnknownExit(r2QueueMessageSchema)(
-        message.body,
-      );
-      if (Exit.isFailure(result)) {
-        console.error("Invalid R2 queue message body", {
-          messageId: message.id,
-          cause: String(result.cause),
-          body: message.body,
-        });
+      const exit = await runEffect(processQueueMessage(message.body));
+      if (Exit.isSuccess(exit)) {
         message.ack();
       } else {
-        const notification = result.value;
-        if (
-          notification.action !== "PutObject" &&
-          notification.action !== "DeleteObject"
-        ) {
+        const squashed = Cause.squash(exit.cause);
+        if (Schema.isSchemaError(squashed)) {
           message.ack();
-        } else if (notification.action === "DeleteObject") {
-          await handleInvoiceDelete({ env, message, notification });
         } else {
-          await handleInvoiceUpload({ env, message, notification });
+          message.retry();
         }
       }
     }
