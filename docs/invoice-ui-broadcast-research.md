@@ -64,16 +64,11 @@ Keep the shape small:
 
 ```ts
 interface ActivityMessage {
-  readonly id: string;
   readonly createdAt: string;
   readonly level: "info" | "success" | "error";
   readonly text: string;
-  readonly entityId?: string;
 }
 ```
-
-Why do we need entityId? these messages are not meant to be operational. only informational.
-I'm also unsure why an id is needed? Present rationale.
 
 Recommended envelope:
 
@@ -88,7 +83,7 @@ That gives us:
 
 - one generic UI stream
 - one decoder in the client
-- enough structure for list rendering, dedupe, and styling
+- enough structure for rendering and styling
 - no workflow- or invoice-specific schema in the transport
 
 ## Broadcast Path
@@ -110,15 +105,11 @@ Keep it generic and sparse.
 
 For invoices, minimum set:
 
-- upload received
-- extraction started
-- extraction completed
-- extraction failed
+- invoice uploaded
+- invoice extraction started
+- invoice extraction completed
+- invoice extraction failed
 - invoice deleted
-
-should be something like
-
-invoice uploaded, invoice extraction started/completed/failed, invoice deleted
 
 Optional later:
 
