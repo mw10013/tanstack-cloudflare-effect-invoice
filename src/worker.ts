@@ -56,16 +56,6 @@ const makeLoggerLayer = (env: Env) => {
   );
 };
 
-const makeScheduledRunEffect = (env: Env) => {
-  const envLayer = makeEnvLayer(env);
-  const d1Layer = Layer.provideMerge(D1.layer, envLayer);
-  const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
-  const runtimeLayer = Layer.merge(repositoryLayer, makeLoggerLayer(env));
-  return <A, E>(
-    effect: Effect.Effect<A, E, Layer.Success<typeof runtimeLayer>>,
-  ) => Effect.runPromise(Effect.provide(effect, runtimeLayer));
-};
-
 /**
  * Runs an HTTP Effect within the app layer, converting failures to throwable
  * values compatible with TanStack Start's server function error serialization.
@@ -323,27 +313,21 @@ export default {
   },
 
   async scheduled(scheduledEvent, env, _ctx) {
-    const runEffect = makeScheduledRunEffect(env);
-    switch (scheduledEvent.cron) {
-      case "0 0 * * *": {
-        await runEffect(
-          Effect.gen(function* () {
+    const envLayer = makeEnvLayer(env);
+    const d1Layer = Layer.provideMerge(D1.layer, envLayer);
+    const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
+    const runtimeLayer = Layer.merge(repositoryLayer, makeLoggerLayer(env));
+    const effect =
+      scheduledEvent.cron === "0 0 * * *"
+        ? Effect.gen(function* () {
             const repository = yield* Repository;
             const deletedCount = yield* repository.deleteExpiredSessions();
             yield* Effect.logInfo("session.cleanup.expired", { deletedCount });
-          }),
-        );
-        break;
-      }
-      default: {
-        await runEffect(
-          Effect.logWarning("session.cleanup.unexpectedCronSchedule", {
+          })
+        : Effect.logWarning("session.cleanup.unexpectedCronSchedule", {
             cron: scheduledEvent.cron,
-          }),
-        );
-        break;
-      }
-    }
+          });
+    await Effect.runPromise(Effect.provide(effect, runtimeLayer));
   },
 
   async queue(batch, env) {
