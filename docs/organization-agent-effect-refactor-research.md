@@ -122,16 +122,25 @@ graph TD
     CTOR -->|"Layer.merge(makeLoggerLayer(env))"| LOG
 ```
 
-### Constructor: Only Logger Layer
+### Constructor: Fully Synchronous, No `blockConcurrencyWhile` Needed
 
-`this.runEffect` provides just the logger layer. Agent capabilities come from `this` directly.
+Everything in the constructor is synchronous:
+
+1. **`this.sql\`CREATE TABLE...\``** — SQLite operations are synchronous in Durable Objects. They don't yield the event loop, so they execute atomically. No interleaving possible. From `refs/cloudflare-docs/.../state.mdx:105`: "SQLite storage operations are synchronous and do not yield the event loop, so they execute atomically without [blockConcurrencyWhile]."
+
+2. **Layer construction** — `makeLoggerLayer(env)` and `Layer.merge(...)` are synchronous. Layers are lazy descriptions (like blueprints). `Layer.succeed()`, `Layer.succeedServices()`, `Layer.merge()` all return Layer objects immediately without executing anything. Actual layer building only happens when `Effect.runPromise` is called at method invocation time.
+
+3. **`this.runEffect` assignment** — just stores a function reference.
+
+`blockConcurrencyWhile` is only needed for **async** constructor initialization (e.g., reading from KV, making fetch calls). It has a throughput cost (~200 req/sec cap) and a 30-second timeout. From `refs/cloudflare-docs/.../rules-of-durable-objects.mdx:872`: "Because blockConcurrencyWhile() blocks _all_ concurrency unconditionally, it significantly reduces throughput."
 
 ```ts
 constructor(ctx: DurableObjectState, env: Env) {
   super(ctx, env);
-  void this.sql`create table if not exists Invoice (...)`;
-  const loggerLayer = makeLoggerLayer(env);
-  this.runEffect = (effect) => Effect.runPromise(Effect.provide(effect, loggerLayer));
+  void this.sql`create table if not exists Invoice (...)`;  // sync SQLite
+  const loggerLayer = makeLoggerLayer(env);                  // sync: builds Layer description
+  this.runEffect = (effect) =>                               // sync: stores a function
+    Effect.runPromise(Effect.provide(effect, loggerLayer));   // deferred: runs at method call time
 }
 ```
 
