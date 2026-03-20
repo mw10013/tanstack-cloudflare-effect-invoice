@@ -72,6 +72,9 @@ interface ActivityMessage {
 }
 ```
 
+Why do we need entityId? these messages are not meant to be operational. only informational.
+I'm also unsure why an id is needed? Present rationale.
+
 Recommended envelope:
 
 ```ts
@@ -112,6 +115,10 @@ For invoices, minimum set:
 - extraction completed
 - extraction failed
 - invoice deleted
+
+should be something like
+
+invoice uploaded, invoice extraction started/completed/failed, invoice deleted
 
 Optional later:
 
