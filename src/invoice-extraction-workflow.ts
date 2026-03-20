@@ -142,7 +142,7 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
           try: () =>
             step.do("save-extracted-json", () =>
               runEffect(
-                Effect.promise(() =>
+                Effect.tryPromise(() =>
                   agent.saveExtractedJson({
                     invoiceId: event.payload.invoiceId,
                     idempotencyKey: event.payload.idempotencyKey,
