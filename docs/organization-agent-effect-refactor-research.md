@@ -187,22 +187,7 @@ getInvoices() {
 
 ### `broadcastActivity` Helper
 
-Takes the agent instance as a parameter since it's a module-level function (no `this` binding):
-
-```ts
-const broadcastActivity = (
-  agent: OrganizationAgent,
-  input: { level: WorkflowProgress["level"]; text: string },
-) =>
-  Effect.sync(() =>
-    agent.broadcast(JSON.stringify({
-      type: "activity",
-      message: { createdAt: new Date().toISOString(), level: input.level, text: input.text },
-    } satisfies ActivityEnvelope)),
-  );
-```
-
-Or as an `Effect.fn` that takes the agent:
+Module-level `Effect.fn` that takes the agent instance as a parameter (no `this` binding needed):
 
 ```ts
 const broadcastActivity = Effect.fn("broadcastActivity")(function* (
@@ -217,8 +202,6 @@ const broadcastActivity = Effect.fn("broadcastActivity")(function* (
 ```
 
 Called as `yield* broadcastActivity(this, { level: "info", text: "..." })`.
-
-Effect.fn is probably better?
 
 ## Sync vs Async: Research Findings
 
