@@ -21,6 +21,7 @@ interface InvoiceExtractionWorkflowParams {
   readonly contentType: string;
 }
 
+// Optional cause: mixed-origin error — wraps caught step rejections and direct workflow-state failures.
 export class InvoiceExtractionWorkflowError extends Schema.TaggedErrorClass<InvoiceExtractionWorkflowError>()(
   "InvoiceExtractionWorkflowError",
   {

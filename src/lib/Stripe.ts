@@ -224,6 +224,7 @@ export class Stripe extends ServiceMap.Service<Stripe>()("Stripe", {
   static layer = Layer.effect(this, this.make);
 }
 
+// Optional cause: mixed-origin error — wraps rejections (tryStripe) and direct failures (failStripe).
 export class StripeError extends Schema.TaggedErrorClass<StripeError>()(
   "StripeError",
   {

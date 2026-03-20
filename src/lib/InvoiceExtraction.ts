@@ -69,6 +69,7 @@ const makeGatewayUrl = ({
 }) =>
   `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/google-ai-studio/v1beta/models/gemini-2.5-flash:generateContent`;
 
+// Optional cause: mixed-origin error — wraps mapError'd failures and direct non-2xx response errors.
 export class InvoiceExtractionError extends Schema.TaggedErrorClass<InvoiceExtractionError>()(
   "InvoiceExtractionError",
   {
