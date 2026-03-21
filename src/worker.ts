@@ -6,8 +6,6 @@ import {
   ConfigProvider,
   Effect,
   Layer,
-  Logger,
-  References,
   ServiceMap,
 } from "effect";
 import * as Exit from "effect/Exit";
@@ -17,8 +15,8 @@ import * as Schema from "effect/Schema";
 import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { D1 } from "@/lib/D1";
-import * as Domain from "@/lib/Domain";
 import { KV } from "@/lib/KV";
+import { makeLoggerLayer } from "@/lib/LoggerLayer";
 import { R2 } from "@/lib/R2";
 import { Repository } from "@/lib/Repository";
 import { Request as AppRequest } from "@/lib/Request";
@@ -37,24 +35,6 @@ const makeEnvLayer = (env: Env) =>
       ),
     ),
   );
-
-const makeLoggerLayer = (env: Env) => {
-  const environment = Schema.decodeUnknownSync(Domain.Environment)(
-    env.ENVIRONMENT,
-  );
-  return Layer.merge(
-    Logger.layer(
-      environment === "production"
-        ? [Logger.consoleJson, Logger.tracerLogger]
-        : [Logger.consolePretty(), Logger.tracerLogger],
-      { mergeWithExisting: false },
-    ),
-    Layer.succeed(
-      References.MinimumLogLevel,
-      environment === "production" ? "Info" : "Debug",
-    ),
-  );
-};
 
 /**
  * Runs an HTTP Effect within the app layer, converting failures to throwable
