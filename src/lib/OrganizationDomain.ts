@@ -21,4 +21,4 @@ export class OrganizationAgentError extends Schema.TaggedErrorClass<Organization
   { message: Schema.String },
 ) {}
 
-export const activeWorkflowStatuses = new Set(["queued", "running", "waiting"]);
+export const activeWorkflowStatuses = new Set<InstanceStatus["status"]>(["queued", "running", "waiting"]);
