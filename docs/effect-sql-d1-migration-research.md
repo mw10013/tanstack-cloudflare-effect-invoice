@@ -96,6 +96,83 @@ yield* sql.batch([
 
 **Caveat:** Spreading SqlClient's interface means we couple to its shape. If upstream adds a `batch` property, we'd shadow it.
 
+## Adding idempotentWrite Retry to SqlClient Queries
+
+`SqlError` has the same shape as our `D1Error` (`cause: Defect`, `message: optional(String)`), so the retry predicate transfers directly.
+
+### Approach: Retry combinator on the wrapper service
+
+Add a `retryable` method that wraps any `Effect<A, SqlError>` with our D1 transient-error retry:
+
+```ts
+const RETRYABLE_ERROR_SIGNALS = [
+  "reset because its code was updated",
+  "starting up d1 db storage caused object to be reset",
+  "network connection lost",
+  "internal error in d1 db storage caused object to be reset",
+  "cannot resolve d1 db due to transient issue on remote node",
+  "can't read from request stream because client disconnected",
+] as const
+
+const retryTransientD1 = <A, R>(effect: Effect.Effect<A, SqlError, R>) =>
+  effect.pipe(
+    Effect.retry({
+      while: (error) => {
+        const message = (error.message ?? "").toLowerCase()
+        return RETRYABLE_ERROR_SIGNALS.some((signal) => message.includes(signal))
+      },
+      times: 2,
+      schedule: Schedule.exponential("1 second").pipe(Schedule.jittered),
+    }),
+  )
+```
+
+Integrated into the Sql wrapper:
+
+```ts
+class Sql extends ServiceMap.Service<Sql>()("Sql", {
+  make: Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const { D1: rawD1 } = yield* CloudflareEnv
+
+    const batch = Effect.fn("Sql.batch")(function* <T = Record<string, unknown>>(
+      statements: ReadonlyArray<Statement.Statement<any>>,
+      options?: { readonly idempotentWrite?: boolean },
+    ) {
+      const prepared = statements.map((stmt) => {
+        const [query, params] = stmt.compile()
+        return rawD1.prepare(query).bind(...params)
+      })
+      return yield* tryD1(() => rawD1.batch<T>(prepared)).pipe(
+        options?.idempotentWrite ? retryTransientD1 : identity,
+      )
+    })
+
+    return { ...sql, batch, retryable: retryTransientD1 }
+  }),
+}) {}
+```
+
+Usage:
+
+```ts
+const sql = yield* Sql
+
+// read — no retry needed
+const users = yield* sql`SELECT * FROM users WHERE id = ${id}`
+
+// single write with retry
+yield* sql.retryable(sql`UPDATE sessions SET activeOrganizationId = ${orgId} WHERE userId = ${userId}`)
+
+// batch with retry
+yield* sql.batch([
+  sql`DELETE FROM Organization WHERE ...`,
+  sql`DELETE FROM User WHERE id = ${userId} RETURNING *`,
+], { idempotentWrite: true })
+```
+
+`retryable` is opt-in per query — same semantics as current `idempotentWrite: true`. Reads don't need it. Writes that are idempotent opt in explicitly.
+
 ## Trade-offs
 
 ### Gains
@@ -107,7 +184,7 @@ yield* sql.batch([
 
 ### Losses (mitigated)
 1. ~~batch()~~ — preserved via compile-and-batch wrapper
-2. ~~idempotentWrite~~ — moved into wrapper
+2. ~~idempotentWrite~~ — `retryTransientD1` combinator on wrapper, opt-in per query
 3. ~~D1 metadata~~ — accessible on batch; single-query meta via `sql.unsafe()`
 4. `first()` → `Option` — use `SqlSchema.findOneOption` instead
 
