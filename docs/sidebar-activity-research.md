@@ -19,126 +19,166 @@ const agent = usePartySocket({
 
 This means naively adding `useAgent` in both the sidebar and the invoices route **will** create 2 concurrent WebSockets.
 
-## Architecture Options
+## Architecture: Lift `useAgent` to Layout + Context for Full Agent Access
 
-### Option A: Lift `useAgent` to Layout Route, Share via Query Cache (Recommended)
+Move the single `useAgent` call to `app.$organizationId.tsx` (the layout route). Expose the agent connection via React context so nested routes can access `call`, `stub`, `setState`, etc. Use React Query cache as the data bus for activity messages.
 
-Move the single `useAgent` call to `app.$organizationId.tsx` (the layout route that renders `<AppSidebar>` + `<Outlet>`). Use React Query cache as the shared data bus.
+### Why context is needed alongside query cache
 
-**How it works:**
+`useAgent` returns more than messages — it returns the full agent socket with `call`, `stub`, `setState`, `ready`. Future routes will need these capabilities (e.g., an agent chat route calling RPCs, a settings route updating agent state). Query cache handles the broadcast messages well, but the socket itself must be shared via context.
 
-1. `useAgent` in the layout route's `RouteComponent` handles the single WebSocket
-2. `onMessage` callback writes activity messages into the query cache via `queryClient.setQueryData(activityQueryKey(organizationId), ...)`
-3. `onMessage` also calls `router.invalidate()` + `queryClient.invalidateQueries(...)` for invoice-related activity (same logic as today)
-4. Sidebar reads from query cache via `useQuery({ queryKey: activityQueryKey(organizationId) })`
-5. Invoices route reads from the same query cache — no more `useAgent` needed there
+### How it works
 
 ```
 app.$organizationId.tsx (layout)
+│
 ├── useAgent (single WebSocket)
-│   └── onMessage → queryClient.setQueryData(activityQueryKey, ...)
-│                  → router.invalidate() (when invoice-related)
-│                  → queryClient.invalidateQueries(invoiceItems)
-├── <AppSidebar>
-│   └── useQuery(activityQueryKey) → renders activity feed
-└── <Outlet>
-    └── invoices.tsx
-        └── useQuery(activityQueryKey) → renders activity card (reads same cache)
+│   ├── onMessage → queryClient.setQueryData(activityQueryKey, ...)
+│   └── onMessage → route-specific invalidation (dispatched, not hardcoded)
+│
+├── <OrganizationAgentContext.Provider value={agent}>
+│   ├── <AppSidebar>
+│   │   └── useQuery(activityQueryKey) → renders activity feed
+│   └── <Outlet>
+│       ├── invoices.tsx
+│       │   └── useQuery(activityQueryKey) → activity (read-only)
+│       │   └── useOrganizationAgent() → if RPC needed in future
+│       ├── agent.tsx
+│       │   └── useOrganizationAgent() → stub.someMethod(), setState()
+│       └── future-route.tsx
+│           └── useOrganizationAgent() → call(), stub
 ```
 
-**Pros:**
-
-- Single WebSocket, zero duplication
-- Both consumers read from the same React Query cache entry
-- Activity feed persists across route navigations (sidebar never unmounts)
-- Follows TanStack pattern: layout route manages shared concerns, query cache is the data bus
-- Invoices route simplifies (removes useAgent, keeps useQuery)
-
-**Cons:**
-
-- Moves WebSocket lifecycle up to layout — all child routes get invalidation even if they don't care
-- Tighter coupling between layout route and invoice-specific invalidation logic
-
-**Migration path:**
-
-1. Add `useAgent` + `onMessage` logic to `app.$organizationId.tsx` RouteComponent
-2. Add activity UI to AppSidebar (reads from query cache)
-3. Remove `useAgent` from invoices route, keep `useQuery(activityQueryKey)` for the existing activity card
-4. Extract `shouldInvalidateForActivity` + invalidation logic to shared module
-
-### Option B: Shared Context Provider
-
-Create a React context that wraps `useAgent` and provides the connection + messages to the tree.
+### Context shape
 
 ```tsx
-// src/lib/OrganizationActivityProvider.tsx
-const OrganizationActivityContext = React.createContext<{
-  messages: readonly ActivityMessage[];
-} | null>(null);
-
-function OrganizationActivityProvider({ organizationId, children }) {
-  const queryClient = useQueryClient();
-  const router = useRouter();
-  const [messages, setMessages] = React.useState<readonly ActivityMessage[]>(
-    [],
-  );
-
-  useAgent<OrganizationAgent, unknown>({
-    agent: "organization-agent",
-    name: organizationId,
-    onMessage: (event) => {
-      // decode, update cache, invalidate...
-    },
-  });
-
-  return (
-    <OrganizationActivityContext value={{ messages }}>
-      {children}
-    </OrganizationActivityContext>
-  );
+// src/lib/OrganizationAgent.tsx
+interface OrganizationAgentContext {
+  readonly call: AgentMethodCall<OrganizationAgent>;
+  readonly stub: AgentStub<OrganizationAgent>;
+  readonly setState: (state: State) => void;
+  readonly ready: Promise<void>;
 }
+
+const OrganizationAgentCtx = React.createContext<OrganizationAgentContext | null>(null);
+
+const useOrganizationAgent = () => {
+  const ctx = React.useContext(OrganizationAgentCtx);
+  if (!ctx) throw new Error("useOrganizationAgent must be used within OrganizationAgentProvider");
+  return ctx;
+};
 ```
 
-**Pros:**
+The context exposes only the RPC/state interface — **not** the raw socket or `onMessage`. Messages flow through query cache exclusively. This keeps the context stable (no re-renders on every message) while still giving nested routes full agent capabilities.
 
-- Clean API for consumers (`useOrganizationActivity()`)
-- Encapsulates WebSocket + decoding logic
+### Invalidation concern: `router.invalidate()` is broad
 
-**Cons:**
+When the layout route calls `router.invalidate()`, TanStack Router re-runs **all active route loaders** in the current tree:
 
-- Redundant with query cache (context duplicates what setQueryData already provides)
-- Extra abstraction layer with minimal benefit over Option A
-- React context re-renders all consumers on every message
+```mermaid
+graph TD
+    A["router.invalidate()"] --> B["app.$organizationId beforeLoad"]
+    B --> C["app.$organizationId loader (if any)"]
+    C --> D["active child route loader"]
 
-### Option C: Conditional `useAgent` with `enabled` Flag
+    style D fill:#f96,stroke:#333
+```
 
-Keep `useAgent` in both locations but disable the invoices one when sidebar is active.
+**Example of unnecessary work:**
+
+1. User is on `/app/org123/members`
+2. An invoice extraction completes → broadcast arrives
+3. Layout's `onMessage` calls `router.invalidate()`
+4. Members route loader re-runs (fetches member list from server) — **wasted call**, nothing changed
+
+**Negative impacts:**
+- Unnecessary server roundtrips on unrelated routes
+- Brief loading states / spinners on pages that have no new data
+- Scales poorly as more child routes are added
+
+### Solution: Scoped invalidation via query keys instead of `router.invalidate()`
+
+Replace the broad `router.invalidate()` with targeted `queryClient.invalidateQueries()` calls. Each route owns its query keys; only relevant caches get invalidated.
 
 ```tsx
-// sidebar
-useAgent({ agent: "organization-agent", name: organizationId, enabled: true });
+// In layout's onMessage handler:
+onMessage: (event) => {
+  const message = decodeActivityMessage(event);
+  if (!message) return;
 
-// invoices route
-useAgent({ agent: "organization-agent", name: organizationId, enabled: false });
+  // Always: update activity cache
+  queryClient.setQueryData(
+    activityQueryKey(organizationId),
+    (current: readonly ActivityMessage[] | undefined) =>
+      [message, ...(current ?? [])].slice(0, 50),
+  );
+
+  // Scoped: only invalidate invoice-related queries
+  if (shouldInvalidateForInvoice(message.text)) {
+    queryClient.invalidateQueries({
+      queryKey: ["organization", organizationId, "invoices"],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["organization", organizationId, "invoiceItems"],
+    });
+  }
+
+  // Future: other message types invalidate other query keys
+  // if (shouldInvalidateForBilling(message.text)) { ... }
+};
 ```
 
-**Cons:**
+This eliminates `router.invalidate()` entirely. Routes that use `useQuery` with matching keys auto-refetch; routes with non-matching keys are untouched.
 
-- Fragile coordination (which one is "primary"?)
-- Invoices route loses real-time updates when sidebar owns the connection
-- Doesn't solve the data sharing problem
+**But wait — the invoices route uses a loader (`Route.useLoaderData()`), not `useQuery`, for the invoice list.** To make scoped invalidation work, the invoices route needs to switch from loader-based data fetching to `useQuery`-based. This is a good change anyway: it decouples the invoice list from route navigation lifecycle and lets query invalidation drive refetches precisely.
 
-**Not recommended.**
+### Coupling concern: layout shouldn't know about invoice logic
 
-## Recommendation: Option A
+Currently `shouldInvalidateForActivity` is hardcoded with invoice-specific strings. As more features are added (billing events, member events, etc.), the layout route becomes a routing table for every domain's invalidation logic.
 
-Option A is the simplest, uses existing TanStack primitives (query cache as shared state), and requires the least new abstraction. The layout route already manages the sidebar and organization context — adding the WebSocket connection there is natural.
+**Solution: Registry pattern.** Each route registers its own invalidation rules. The layout's `onMessage` dispatches to all registered handlers.
 
-## Sidebar UI Considerations
+```tsx
+// src/lib/Activity.ts
+type ActivityHandler = (message: ActivityMessage, queryClient: QueryClient) => void;
 
-The sidebar uses the Base UI sidebar component system (`src/components/ui/sidebar.tsx`). Activity feed placement options:
+const handlers = new Set<ActivityHandler>();
 
-**Below nav menu, above footer:**
+const registerActivityHandler = (handler: ActivityHandler) => {
+  handlers.add(handler);
+  return () => { handlers.delete(handler); };
+};
+
+const dispatchActivity = (message: ActivityMessage, queryClient: QueryClient) => {
+  for (const handler of handlers) handler(message, queryClient);
+};
+```
+
+```tsx
+// In invoices route (registers on mount, unregisters on unmount):
+React.useEffect(() => {
+  return registerActivityHandler((message, qc) => {
+    if (shouldInvalidateForInvoice(message.text)) {
+      qc.invalidateQueries({ queryKey: ["organization", organizationId, "invoices"] });
+      qc.invalidateQueries({ queryKey: ["organization", organizationId, "invoiceItems"] });
+    }
+  });
+}, [organizationId]);
+```
+
+```tsx
+// Layout's onMessage — domain-agnostic:
+onMessage: (event) => {
+  const message = decodeActivityMessage(event);
+  if (!message) return;
+  queryClient.setQueryData(activityQueryKey(organizationId), ...);
+  dispatchActivity(message, queryClient);
+};
+```
+
+Now the layout route knows nothing about invoices, billing, or any other domain. Each route owns its own invalidation logic and registers/unregisters as it mounts/unmounts. The layout just broadcasts.
+
+## Sidebar UI
 
 ```
 ┌──────────────────────┐
@@ -150,49 +190,47 @@ The sidebar uses the Base UI sidebar component system (`src/components/ui/sideba
 │ ...                   │
 ├──────────────────────┤
 │ ● Invoice uploaded    │
-│ ● Extraction done     │  SidebarContent > SidebarGroup (new)
-│ ● ...                 │  (ScrollArea, compact badges)
+│ ● Extraction done     │  SidebarContent > SidebarGroup (mt-auto)
+│ ● ...                 │  ScrollArea, compact, most recent at top
 ├──────────────────────┤
 │ user@email.com ▾      │  SidebarFooter
 └──────────────────────┘
 ```
 
-Use a second `SidebarGroup` at the bottom of `SidebarContent` with `className="mt-auto"` to push it down. Keep items compact — small text, dot indicators instead of full badges, relative timestamps.
+- Second `SidebarGroup` at bottom of `SidebarContent` with `className="mt-auto"`
+- Compact items: small text, dot indicators, relative timestamps
+- ScrollArea for overflow, most recent at top, capped at 50 in cache
+- When collapsed: dot/badge indicator for unread count
 
-When sidebar is collapsed (icon mode), the activity group could show a dot/badge indicator for unread count, or hide entirely.
+## Decisions
 
-## Key Files to Modify
+- Show all messages with scroll, most recent at top, cache cap ~50
+- Unread indicator when sidebar collapsed: yes
+- Clicking activity does not navigate
+- Invoices route activity card: removed (sidebar replaces it)
+- No filtering by type
 
-1. `src/routes/app.$organizationId.tsx` — add `useAgent`, pass activity to sidebar
-2. `src/routes/app.$organizationId.invoices.tsx` — remove `useAgent`, keep `useQuery(activityQueryKey)`
-3. `src/lib/Activity.ts` — potentially add shared helpers (activityQueryKey, shouldInvalidateForActivity, decodeActivityMessage)
+## Migration Plan
 
-## Open Questions
+1. Create `src/lib/OrganizationAgentContext.tsx` — context + `useOrganizationAgent` hook
+2. Create shared helpers in `src/lib/Activity.ts` — `activityQueryKey`, `decodeActivityMessage`, `dispatchActivity`, `registerActivityHandler`
+3. Update `app.$organizationId.tsx`:
+   - Add `useAgent` in `RouteComponent`
+   - Wrap `<Outlet>` with context provider
+   - `onMessage` → write to query cache + `dispatchActivity`
+4. Add activity UI to `AppSidebar` — `useQuery(activityQueryKey)` + render
+5. Update `app.$organizationId.invoices.tsx`:
+   - Remove `useAgent`
+   - Remove activity card UI
+   - Switch invoice list from loader to `useQuery` (enables scoped invalidation)
+   - Register invalidation handler via `registerActivityHandler`
+   - Use `useOrganizationAgent()` if RPC access needed
+6. Update `app.$organizationId.agent.tsx` — replace its `useAgent` with `useOrganizationAgent()` from context
 
-1. Should the sidebar activity show all messages or just recent N? (Currently capped at 100 in query cache)
+## Key Files
 
-show all with scroll. most recent at top. cap should probably be smaller in the cache
-
-2. Unread indicator when sidebar is collapsed?
-
-yes
-
-3. Should clicking an activity message navigate to the relevant invoice?
-
-no
-
-4. Should the invoices route activity card be removed entirely once sidebar has it, or keep both?
-
-will be removed.
-
-5. Filter by type? (e.g., sidebar shows all, invoices card shows only invoice-related)
-
-no filter
-
-I agree we should push on Option A (lift useAgent). remove the other options to make the md more concise.
-
-The tricky thing about lifting useAgent is that I think we'll need other aspects of it in nested components, not just the messages which will be handled by tanstack query. So I have a concern about that. I would like to lift and have only one useAgent, of course, but how to do that correctly.
-
-In the cons, i don't understand what all child routes get invalidation means. explain with examples and negative impacts. use mermaid diagrams if helpful
-
-You also mention a tighter coupling between layout route and invoice invalidation logic. Say more about that. we will have many other routes that need useAgent functionality in the future.
+1. `src/lib/OrganizationAgentContext.tsx` — new: context + provider + hook
+2. `src/lib/Activity.ts` — extend: shared helpers, registry
+3. `src/routes/app.$organizationId.tsx` — modify: add useAgent, context provider, onMessage
+4. `src/routes/app.$organizationId.invoices.tsx` — modify: remove useAgent, remove activity card, register handler
+5. `src/routes/app.$organizationId.agent.tsx` — modify: use context instead of useAgent
