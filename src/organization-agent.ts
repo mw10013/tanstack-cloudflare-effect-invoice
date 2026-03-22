@@ -6,6 +6,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { ActivityEnvelope, WorkflowProgress } from "@/lib/Activity";
 import { WorkflowProgressSchema } from "@/lib/Activity";
 import { makeLoggerLayer } from "@/lib/LoggerLayer";
+import type { InvoiceExtractionFields, InvoiceItemFields } from "@/lib/OrganizationDomain";
 import {
   OrganizationAgentError,
   activeWorkflowStatuses,
@@ -75,8 +76,33 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       idempotencyKey text not null unique,
       r2ObjectKey text not null,
       status text not null,
+      invoiceConfidence real not null default 0,
+      invoiceNumber text not null default '',
+      invoiceDate text not null default '',
+      dueDate text not null default '',
+      currency text not null default '',
+      vendorName text not null default '',
+      vendorEmail text not null default '',
+      vendorAddress text not null default '',
+      billToName text not null default '',
+      billToEmail text not null default '',
+      billToAddress text not null default '',
+      subtotal text not null default '',
+      tax text not null default '',
+      total text not null default '',
+      amountDue text not null default '',
       extractedJson text,
       error text
+    )`;
+    void this.sql`create table if not exists InvoiceItem (
+      id text primary key,
+      invoiceId text not null references Invoice(id) on delete cascade,
+      "order" real not null,
+      description text not null default '',
+      quantity text not null default '',
+      unitPrice text not null default '',
+      amount text not null default '',
+      period text not null default ''
     )`;
     this.runEffect = makeRunEffect(ctx, env);
   }
@@ -187,15 +213,17 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  saveExtractedJson(input: {
+  saveExtraction(input: {
     invoiceId: string;
     idempotencyKey: string;
+    extracted: typeof InvoiceExtractionFields.Type;
+    invoiceItems: readonly (typeof InvoiceItemFields.Type)[];
     extractedJson: string;
   }) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
         const repo = yield* OrganizationRepository;
-        const updated = yield* repo.saveExtractedJson(input);
+        const updated = yield* repo.saveExtraction(input);
         if (updated.length === 0) return;
         yield* broadcastActivity(this, {
           level: "success",

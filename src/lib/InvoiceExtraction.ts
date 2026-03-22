@@ -6,31 +6,13 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
+import { InvoiceExtractionFields, InvoiceItemFields } from "./OrganizationDomain";
+
 const InvoiceExtractionSchema = Schema.Struct({
-  invoiceConfidence: Schema.Number,
-  invoiceNumber: Schema.String,
-  invoiceDate: Schema.String,
-  dueDate: Schema.String,
-  currency: Schema.String,
-  vendorName: Schema.String,
-  vendorEmail: Schema.String,
-  vendorAddress: Schema.String,
-  billToName: Schema.String,
-  billToEmail: Schema.String,
-  billToAddress: Schema.String,
-  lineItems: Schema.Array(
-    Schema.Struct({
-      description: Schema.String,
-      quantity: Schema.String,
-      unitPrice: Schema.String,
-      amount: Schema.String,
-      period: Schema.String,
-    }),
-  ),
-  subtotal: Schema.String,
-  tax: Schema.String,
-  total: Schema.String,
-  amountDue: Schema.String,
+  ...InvoiceExtractionFields.fields,
+  invoiceItems: Schema.Array(Schema.Struct({
+    ...InvoiceItemFields.fields,
+  })),
 });
 
 const invoiceExtractionJsonSchema =
@@ -57,7 +39,7 @@ Rules:
 - Set fields to empty string "" when the information is not found in the document.
 - Keep amounts as strings exactly as they appear in the document, including currency symbols (e.g., "$5.39", "$0.011 per 1,000").
 - Keep dates as strings in whatever format appears in the document.
-- For line items, include every line item found. Set quantity, unitPrice, or amount to empty string "" if not clearly stated for that item.
+- For invoiceItems, include every line item found. Set quantity, unitPrice, or amount to empty string "" if not clearly stated for that item.
 - For addresses, concatenate all address components into a single string (e.g., "101 Townsend Street, San Francisco, California 94107, United States"). Set to empty string "" if no address is found.`;
 
 const makeGatewayUrl = ({

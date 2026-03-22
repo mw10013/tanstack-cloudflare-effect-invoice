@@ -117,7 +117,7 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
           level: "info",
           text: `Invoice extraction in progress: ${event.payload.fileName}`,
         });
-        const extractedJson = yield* Effect.tryPromise({
+        const extractionResult = yield* Effect.tryPromise({
           try: () =>
             step.do("extract-invoice", () =>
               runEffect(
@@ -136,22 +136,25 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
               cause,
             }),
         });
+        const { invoiceItems, ...extracted } = extractionResult;
         yield* Effect.tryPromise({
           try: () =>
-            step.do("save-extracted-json", () =>
+            step.do("save-extraction", () =>
               runEffect(
                 Effect.tryPromise(() =>
-                  agent.saveExtractedJson({
+                  agent.saveExtraction({
                     invoiceId: event.payload.invoiceId,
                     idempotencyKey: event.payload.idempotencyKey,
-                    extractedJson: JSON.stringify(extractedJson),
+                    extracted,
+                    invoiceItems,
+                    extractedJson: JSON.stringify(extractionResult),
                   }),
                 ),
               ),
             ),
           catch: (cause) =>
             new InvoiceExtractionWorkflowError({
-              message: "Workflow step failed: save-extracted-json",
+              message: "Workflow step failed: save-extraction",
               cause,
             }),
         });
