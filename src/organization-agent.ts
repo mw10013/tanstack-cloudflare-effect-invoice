@@ -278,4 +278,14 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       }),
     );
   }
+
+  @callable()
+  getInvoiceItems(invoiceId: string) {
+    return this.runEffect(
+      Effect.gen(function* () {
+        const repo = yield* OrganizationRepository;
+        return yield* repo.getInvoiceItems(invoiceId);
+      }),
+    );
+  }
 }

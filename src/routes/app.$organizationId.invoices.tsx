@@ -1,7 +1,7 @@
 import type { OrganizationAgent } from "@/organization-agent";
 
 import * as React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createFileRoute,
   useHydrated,
@@ -12,7 +12,7 @@ import { useAgent } from "agents/react";
 import { Cause, Config, Effect, Redacted } from "effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
-import { AlertCircle, Copy, FileText, Trash2, Upload } from "lucide-react";
+import { AlertCircle, Copy, FileText, Loader2, Trash2, Upload } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -68,6 +69,11 @@ const uploadFormSchema = Schema.Struct({
 const deleteInvoiceSchema = Schema.Struct({
   invoiceId: Schema.NonEmptyString,
   r2ObjectKey: Schema.NonEmptyString,
+});
+
+const getInvoiceItemsSchema = Schema.Struct({
+  organizationId: Schema.NonEmptyString,
+  invoiceId: Schema.NonEmptyString,
 });
 
 const activityQueryKey = (organizationId: string) =>
@@ -234,6 +240,31 @@ const deleteInvoice = createServerFn({ method: "POST" })
     ),
   );
 
+const getInvoiceItems = createServerFn({ method: "GET" })
+  .inputValidator(Schema.toStandardSchemaV1(getInvoiceItemsSchema))
+  .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const request = yield* AppRequest;
+        const auth = yield* Auth;
+        yield* auth.getSession(request.headers).pipe(
+          Effect.flatMap(Effect.fromOption),
+          Effect.filterOrFail(
+            (s) => s.session.activeOrganizationId === organizationId,
+            () => new Cause.NoSuchElementError(),
+          ),
+        );
+        const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
+        const id = ORGANIZATION_AGENT.idFromName(organizationId);
+        const stub = ORGANIZATION_AGENT.get(id);
+        return yield* Effect.tryPromise(() => stub.getInvoiceItems(invoiceId));
+      }),
+    ),
+  );
+
+const invoiceItemsQueryKey = (organizationId: string, invoiceId: string) =>
+  ["organization", organizationId, "invoiceItems", invoiceId] as const;
+
 export const Route = createFileRoute("/app/$organizationId/invoices")({
   loader: ({ params: data }) => getInvoices({ data }),
   component: RouteComponent,
@@ -302,6 +333,9 @@ function RouteComponent() {
       setActivityMessages(nextMessages);
       if (shouldInvalidateForActivity(message.text)) {
         void router.invalidate();
+        void queryClient.invalidateQueries({
+          queryKey: ["organization", organizationId, "invoiceItems"],
+        });
       }
     },
   });
@@ -324,50 +358,15 @@ function RouteComponent() {
     },
   });
 
-  const selectedInvoiceContent = (() => {
-    if (selectedInvoice === null) {
-      return <p className="text-sm text-muted-foreground">No invoice selected.</p>;
-    }
-    return (
-      <div className="flex flex-col gap-4">
-        {selectedInvoice.status === "error" && (
-          <Alert variant="destructive">
-            <AlertCircle className="size-4" />
-            <AlertTitle>Extraction failed</AlertTitle>
-            <AlertDescription>
-              {selectedInvoice.error ?? "Unknown extraction error"}
-            </AlertDescription>
-          </Alert>
-        )}
-        {selectedInvoice.extractedJson && (
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <h4 className="text-sm font-medium">Extracted JSON</h4>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectedInvoice.extractedJson) {
-                    void copyText(selectedInvoice.extractedJson, "json");
-                  }
-                }}
-              >
-                <Copy className="size-4" />
-                {copiedField === "json" ? "Copied" : "Copy JSON"}
-              </Button>
-            </div>
-            <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
-              {JSON.stringify(JSON.parse(selectedInvoice.extractedJson), null, 2)}
-            </pre>
-          </div>
-        )}
-        {!selectedInvoice.extractedJson && (
-          <p className="text-sm text-muted-foreground">Extraction in progress.</p>
-        )}
-      </div>
-    );
-  })();
+  const getInvoiceItemsFn = useServerFn(getInvoiceItems);
+  const invoiceItemsQuery = useQuery({
+    queryKey: invoiceItemsQueryKey(organizationId, selectedInvoice?.id ?? ""),
+    queryFn: () =>
+      getInvoiceItemsFn({
+        data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
+      }),
+    enabled: selectedInvoice !== null && selectedInvoice.status === "extracted",
+  });
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -487,7 +486,7 @@ function RouteComponent() {
                       key={invoice.id}
                       data-state={selectedInvoiceId === invoice.id ? "selected" : undefined}
                       className="cursor-pointer"
-                      onClick={() => setSelectedInvoiceId(invoice.id)}
+                      onClick={() =>{  setSelectedInvoiceId(invoice.id); }}
                     >
                       <TableCell className="flex items-center gap-2 font-medium">
                         <FileText className="size-4 shrink-0 text-muted-foreground" />
@@ -496,7 +495,7 @@ function RouteComponent() {
                           target="_blank"
                           rel="noreferrer"
                           className="truncate hover:underline"
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) =>{  e.stopPropagation(); }}
                         >
                           {invoice.fileName}
                         </a>
@@ -535,13 +534,164 @@ function RouteComponent() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Extraction Output</CardTitle>
+              <CardTitle>Invoice</CardTitle>
               <CardDescription>
-                {selectedInvoice?.fileName ?? "Select an invoice to inspect extraction output."}
+                {selectedInvoice?.fileName ?? "Select an invoice to view details."}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {selectedInvoiceContent}
+              {(() => {
+                if (selectedInvoice === null)
+                  return <p className="text-sm text-muted-foreground">No invoice selected.</p>;
+                if (selectedInvoice.status === "error")
+                  return (
+                    <Alert variant="destructive">
+                      <AlertCircle className="size-4" />
+                      <AlertTitle>Extraction failed</AlertTitle>
+                      <AlertDescription>
+                        {selectedInvoice.error ?? "Unknown extraction error"}
+                      </AlertDescription>
+                    </Alert>
+                  );
+                if (selectedInvoice.status !== "extracted")
+                  return <p className="text-sm text-muted-foreground">Extraction in progress.</p>;
+                return (
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="flex flex-col gap-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-lg font-semibold">{selectedInvoice.vendorName || "—"}</p>
+                          <p className="whitespace-pre-line text-sm text-muted-foreground">{selectedInvoice.vendorAddress || "—"}</p>
+                          {selectedInvoice.vendorEmail && (
+                            <p className="text-sm text-muted-foreground">{selectedInvoice.vendorEmail}</p>
+                          )}
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-medium">Invoice #{selectedInvoice.invoiceNumber || "—"}</p>
+                          {selectedInvoice.invoiceDate && (
+                            <p className="text-sm text-muted-foreground">Date: {selectedInvoice.invoiceDate}</p>
+                          )}
+                          {selectedInvoice.dueDate && (
+                            <p className="text-sm text-muted-foreground">Due: {selectedInvoice.dueDate}</p>
+                          )}
+                          {selectedInvoice.currency && (
+                            <p className="text-sm text-muted-foreground">Currency: {selectedInvoice.currency}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      <div>
+                        <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">Bill To</p>
+                        <p className="text-sm font-medium">{selectedInvoice.billToName || "—"}</p>
+                        <p className="whitespace-pre-line text-sm text-muted-foreground">{selectedInvoice.billToAddress || "—"}</p>
+                        {selectedInvoice.billToEmail && (
+                          <p className="text-sm text-muted-foreground">{selectedInvoice.billToEmail}</p>
+                        )}
+                      </div>
+
+                      <Separator />
+
+                      {(() => {
+                        if (invoiceItemsQuery.isLoading)
+                          return (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="size-4 animate-spin" />
+                              Loading line items...
+                            </div>
+                          );
+                        if (invoiceItemsQuery.data && invoiceItemsQuery.data.length > 0)
+                          return (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Description</TableHead>
+                                  <TableHead className="text-right">Qty</TableHead>
+                                  <TableHead className="text-right">Unit Price</TableHead>
+                                  <TableHead className="text-right">Amount</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {invoiceItemsQuery.data.map((item) => (
+                                  <TableRow key={item.id}>
+                                    <TableCell>
+                                      <p>{item.description || "—"}</p>
+                                      {item.period && (
+                                        <p className="text-xs text-muted-foreground">{item.period}</p>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="text-right">{item.quantity || "—"}</TableCell>
+                                    <TableCell className="text-right">{item.unitPrice || "—"}</TableCell>
+                                    <TableCell className="text-right">{item.amount || "—"}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          );
+                        return <p className="text-sm text-muted-foreground">No line items.</p>;
+                      })()}
+
+                      <Separator />
+
+                      <div className="flex flex-col items-end gap-1 text-sm">
+                        {selectedInvoice.subtotal && (
+                          <div className="flex gap-8">
+                            <span className="text-muted-foreground">Subtotal</span>
+                            <span>{selectedInvoice.subtotal}</span>
+                          </div>
+                        )}
+                        {selectedInvoice.tax && (
+                          <div className="flex gap-8">
+                            <span className="text-muted-foreground">Tax</span>
+                            <span>{selectedInvoice.tax}</span>
+                          </div>
+                        )}
+                        {selectedInvoice.total && (
+                          <div className="flex gap-8">
+                            <span className="font-medium">Total</span>
+                            <span className="font-medium">{selectedInvoice.total}</span>
+                          </div>
+                        )}
+                        {selectedInvoice.amountDue && (
+                          <div className="mt-1 flex gap-8 border-t pt-1">
+                            <span className="font-semibold">Amount Due</span>
+                            <span className="font-semibold">{selectedInvoice.amountDue}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-sm font-medium">Extracted JSON</h4>
+                        {selectedInvoice.extractedJson && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              if (selectedInvoice.extractedJson) {
+                                void copyText(selectedInvoice.extractedJson, "json");
+                              }
+                            }}
+                          >
+                            <Copy className="size-4" />
+                            {copiedField === "json" ? "Copied" : "Copy JSON"}
+                          </Button>
+                        )}
+                      </div>
+                      {selectedInvoice.extractedJson ? (
+                        <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
+                          {JSON.stringify(JSON.parse(selectedInvoice.extractedJson), null, 2)}
+                        </pre>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No extracted data.</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </>
