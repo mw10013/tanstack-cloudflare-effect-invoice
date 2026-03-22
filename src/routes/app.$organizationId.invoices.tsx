@@ -360,7 +360,10 @@ function RouteComponent() {
 
   const getInvoiceItemsFn = useServerFn(getInvoiceItems);
   const invoiceItemsQuery = useQuery({
-    queryKey: invoiceItemsQueryKey(organizationId, selectedInvoice?.id ?? ""),
+    queryKey: [
+      ...invoiceItemsQueryKey(organizationId, selectedInvoice?.id ?? ""),
+      getInvoiceItemsFn,
+    ],
     queryFn: () =>
       getInvoiceItemsFn({
         data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
