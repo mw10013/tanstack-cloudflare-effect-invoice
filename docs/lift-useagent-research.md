@@ -89,22 +89,13 @@ Two invalidation mechanisms, used for different triggers:
 
 `queryClient.invalidateQueries()` only works with data managed by React Query (`useQuery`), not raw loader data (`Route.useLoaderData()`). Routes whose data gets invalidated by broadcasts need to switch to the **`ensureQueryData` + `useQuery` pattern**. Right now that's only the invoices route. Other routes keep their current loader + `router.invalidate()` pattern untouched.
 
-### `ensureQueryData` vs `prefetchQuery`
+### `ensureQueryData`
 
-Both populate the React Query cache from a loader. The difference:
-
-| | `ensureQueryData` | `prefetchQuery` |
-|---|---|---|
-| **Returns** | `Promise<TData>` — the actual data | `Promise<void>` — nothing |
-| **Throws** | No (returns cached data on fetch failure) | No (silently fails) |
-| **Stale check** | Returns cached data immediately if available, even if stale. Optional `revalidateIfStale: true` to refetch in background. | Respects `staleTime` — refetches if stale |
-| **Use case** | Loader needs to return/await data | Fire-and-forget cache population |
-
-From `refs/tan-query/docs/reference/QueryClient.md`:
+Populates the React Query cache from a loader **and returns the data**. From `refs/tan-query/docs/reference/QueryClient.md`:
 
 > `ensureQueryData` is an asynchronous function that can be used to get an existing query's cached data. If the query does not exist, `queryClient.fetchQuery` will be called and its results returned.
 
-> `prefetchQuery` is an asynchronous method that can be used to prefetch a query before it is needed or rendered with `useQuery` and friends. The method works the same as `fetchQuery` except that it will not throw or return any data.
+Returns `Promise<TData>`. Does not throw (returns cached data on fetch failure). Returns cached data immediately if available, even if stale. Optional `revalidateIfStale: true` to refetch in background.
 
 ### How they work in a TanStack Start loader
 
@@ -181,9 +172,9 @@ The SSR integration is handled automatically by `setupRouterSsrQueryIntegration`
 
 ### SSR caveats
 
-**1. Error handling.** `ensureQueryData` and `prefetchQuery` do not throw. If the fetch fails, the query is simply absent from the cache, and `useQuery` in the component will retry. For critical data where you want the loader to fail on error, use `queryClient.fetchQuery()` instead (it throws).
+**1. Error handling.** `ensureQueryData` does not throw. If the fetch fails, the query is simply absent from the cache, and `useQuery` in the component will retry. For critical data where you want the loader to fail on error, use `queryClient.fetchQuery()` instead (it throws).
 
-**2. No usage in codebase yet.** Zero routes currently use `ensureQueryData`/`prefetchQuery`. This would be the first adoption. The infrastructure is already in place (`queryClient` in router context, `setupRouterSsrQueryIntegration`), but the pattern is new to this codebase.
+**2. No usage in codebase yet.** Zero routes currently use `ensureQueryData`. This would be the first adoption. The infrastructure is already in place (`queryClient` in router context, `setupRouterSsrQueryIntegration`), but the pattern is new to this codebase.
 
 ## Understanding staleTime
 
@@ -282,12 +273,12 @@ const queryClient = new QueryClient({
 // 2. Per-query (useQuery) — overrides global for this query
 useQuery({ queryKey, queryFn, staleTime: 60_000 });
 
-// 3. Per-prefetch (ensureQueryData/prefetchQuery) — only affects the prefetch decision
+// 3. Per-ensureQueryData — only affects whether ensureQueryData itself fetches
 //    Does NOT carry over to the useQuery in the component
 queryClient.ensureQueryData({ queryKey, queryFn, staleTime: 60_000 });
 ```
 
-Important: staleTime on `ensureQueryData`/`prefetchQuery` only controls whether the prefetch itself fires. The `useQuery` in the component uses its own staleTime (or the global default) independently.
+Important: staleTime on `ensureQueryData` only controls whether it fetches or returns cached data. The `useQuery` in the component uses its own staleTime (or the global default) independently.
 
 ### Recommendation: Set global default staleTime to 30s
 
