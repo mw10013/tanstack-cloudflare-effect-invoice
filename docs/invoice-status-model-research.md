@@ -26,14 +26,14 @@ When a user creates an invoice manually (no file, no extraction), the invoice is
 | `extracting` | Extraction workflow running | Upload flow: on invoice insert (R2 notification received) |
 | `ready` | Invoice data is available for use | Upload flow: extraction completes. Manual flow: on create. |
 | `error` | Extraction or processing failed | Upload flow: extraction fails |
-| `deleted` | Soft-deleted (future) | Delete action (replaces current hard delete) |
+| `deleted` | Soft-deleted | Delete action (replaces current hard delete) |
 
 **Removed:**
 - `uploaded` — not needed. Record is inserted with `extracting` since extraction kicks off immediately upon insert.
 - `extracted` — renamed to `ready` (or alternative, see below).
 
 **Added:**
-- `deleted` — for future soft-delete support.
+- `deleted` — for soft-delete.
 
 ### Status Lifecycle: Upload Flow (Revised)
 
@@ -58,15 +58,18 @@ createInvoice server fn → org-agent.createInvoice
 
 Immediately `ready` — no extraction needed.
 
-### Status Lifecycle: Soft Delete (Future)
+### Status Lifecycle: Soft Delete
 
 ```
-deleteInvoice server fn → org-agent
-  → repo.softDeleteInvoice()      status: "deleted"
-  → (optionally) schedule R2 cleanup
+deleteInvoice server fn
+  → auth check
+  → get org agent stub
+  → stub.softDeleteInvoice(invoiceId)
+    → repo.softDeleteInvoice(invoiceId)    status: "deleted"
+    → broadcastActivity("Invoice deleted")
 ```
 
-R2 object cleanup can happen asynchronously or be deferred. The invoice disappears from default queries immediately.
+No R2 deletion. No queue message. No R2 notification. The file stays in R2; the invoice row stays in the DB with status `deleted` and is filtered from default queries.
 
 ---
 
@@ -121,39 +124,81 @@ export const InvoiceStatusValues = [
 
 Four statuses. Minimal, each with clear meaning and a specific lifecycle trigger.
 
-<!-- REVIEW: Any statuses missing? Should "deleted" wait until the soft-delete implementation, or define it now for forward compatibility? -->
-
 ---
 
-## Question 5: UI Impact
+## Soft Delete Implementation
 
-### Badge Mapping (Current → Proposed)
+### Deletable Statuses
 
-Current `getStatusVariant` logic in invoices.tsx:
-- `extracted` → `success` (green)
-- `error` → `destructive` (red)
-- everything else → `secondary` (grey)
+Only invoices in `ready` or `error` can be soft-deleted. Invoices in `extracting` cannot — the running workflow would set status to `ready` or `error` and overwrite the `deleted` status.
 
-Proposed:
-- `ready` → `success` (green)
-- `error` → `destructive` (red)
-- `extracting` → `secondary` (grey)
-- `deleted` → not displayed (filtered from default queries)
+<!-- REVIEW: For `extracting` invoices, should the trash icon be hidden entirely, or shown but disabled? Hidden for now since it's simpler and the extraction is typically fast. -->
 
-### Other UI Changes
+Should only be shown if status is ready or error.
 
-- Remove "uploaded" badge handling (no longer a status)
-- Invoices list query should filter out `deleted` by default
-- Invoice detail view: `ready` replaces `extracted` as the condition for showing full data
+### Current Delete Flow (Hard Delete)
 
+```
+invoices.tsx deleteInvoice server fn
+  → auth check
+  → r2.delete(data.r2ObjectKey)                    ← deletes file from R2
+  → (local) queue.send({ action: "DeleteObject" }) ← triggers queue processing
+  → (prod) R2 notification fires automatically
+    → worker.ts processInvoiceDelete
+      → parseInvoiceObjectKey(key)
+      → stub.onInvoiceDelete({ invoiceId, r2ActionTime, r2ObjectKey })
+        → repo.deleteInvoice(invoiceId, r2ActionTime)   ← SQL: delete from Invoice
+        → broadcastActivity("Invoice deleted")
+```
+
+### Proposed Delete Flow (Soft Delete)
+
+```
+invoices.tsx deleteInvoice server fn
+  → auth check
+  → get org agent stub
+  → stub.softDeleteInvoice(invoiceId)
+    → repo.softDeleteInvoice(invoiceId)    ← SQL: update set status = 'deleted'
+    → broadcastActivity("Invoice deleted")
+```
+
+Need logic to ensure deleting invoice that is in ready.
+
+**What's removed from the flow:**
+- No `r2.delete()` — file stays in R2
+- No queue message (local env)
+- No R2 notification processing (prod env)
+- No `r2ActionTime` concurrency guard needed — soft delete is a simple status update
+
+### Changes by File
+
+| File | Change |
+|---|---|
+| `src/routes/app.$organizationId.invoices.tsx` | `deleteInvoice` server fn: remove R2 delete, remove queue message, call `stub.softDeleteInvoice(invoiceId)` directly. `deleteInvoiceSchema`: remove `r2ObjectKey` field (only `invoiceId` needed). Trash icon: only render when `status === "ready" \|\| status === "error"`. |
+| `src/organization-agent.ts` | Add `@callable() softDeleteInvoice(invoiceId)` method. `onInvoiceDelete`: keep for now (R2 delete notifications from outside the app could still arrive) or remove — see open question. |
+| `src/lib/OrganizationRepository.ts` | Add `softDeleteInvoice`: `update Invoice set status = 'deleted' where id = ? and status in ('ready', 'error')`. Replace or keep `deleteInvoice` — see open question. |
+| `src/lib/OrganizationRepository.ts` | `getInvoices`: add `where status != 'deleted'` filter. |
+| `src/worker.ts` | `processInvoiceDelete`: becomes dead code since the app no longer triggers R2 deletions. Keep for safety (external R2 deletes) or remove. |
+
+### Open Questions
+
+<!-- REVIEW: Should we remove `onInvoiceDelete` and `processInvoiceDelete` (the hard-delete R2 notification path) now, or keep them as dead code for safety? They'd only fire if something outside the app deletes an R2 object. Leaning toward keeping them — they're harmless and provide a safety net. But the hard `delete from Invoice` SQL in `repo.deleteInvoice` would need to stay too if we keep it. -->
+
+Remove dead code
+
+<!-- REVIEW: R2 cleanup strategy — files stay in R2 indefinitely after soft delete. Future options: (1) scheduled cleanup job that deletes R2 objects for invoices in `deleted` status older than N days, (2) manual purge action, (3) never clean up (storage cost). Not blocking for this implementation. -->
+
+Defer. No need to mention.
 ---
 
 ## Summary of Proposed Changes
-
-All items implemented:
 
 1. ~~**Move** `InvoiceStatus` + `InvoiceStatusValues` from Domain.ts → OrganizationDomain.ts~~ **DONE**
 2. ~~**Replace** status values: `["uploaded", "extracting", "extracted", "error"]` → `["extracting", "ready", "error", "deleted"]`~~ **DONE**
 3. ~~**Upload flow**: insert with `extracting` (remove `uploaded` intermediate step)~~ **DONE**
 4. **Manual create flow**: insert with `ready` — deferred
-5. **Soft delete**: set status to `deleted` instead of hard delete — deferred
+5. **Soft delete**: status update to `deleted`, no R2 deletion, trash icon gated on `ready`/`error`
+
+
+
+We don't want to filter out deleted invoices in the UI for now.
