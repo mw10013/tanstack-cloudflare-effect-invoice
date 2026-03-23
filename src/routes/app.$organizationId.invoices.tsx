@@ -496,7 +496,7 @@ function RouteComponent() {
               <Table>
                 <TableHeader>
                     <TableRow>
-                      <TableHead>File</TableHead>
+                      <TableHead>Name</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="w-35" />
@@ -507,21 +507,23 @@ function RouteComponent() {
                     <TableRow
                       key={invoice.id}
                       data-state={selectedInvoiceId === invoice.id ? "selected" : undefined}
-                      className="cursor-pointer"
+                      className="h-12"
                       onClick={() =>{  setSelectedInvoiceId(invoice.id); }}
                     >
-                      <TableCell className="flex items-center gap-2 font-medium">
-                        {invoice.viewUrl && (
-                          <a
-                            href={invoice.viewUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => { e.stopPropagation(); }}
-                          >
-                            <FileText className="size-4 shrink-0 text-muted-foreground hover:text-foreground" />
-                          </a>
-                        )}
-                        <span className="truncate">{invoice.name || invoice.fileName}</span>
+                      <TableCell className="font-medium">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate">{invoice.name || invoice.fileName}</span>
+                          {invoice.viewUrl && (
+                            <a
+                              href={invoice.viewUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => { e.stopPropagation(); }}
+                            >
+                              <FileText className="size-4 shrink-0 text-muted-foreground hover:text-foreground" />
+                            </a>
+                          )}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <Badge variant={getStatusVariant(invoice.status)}>
