@@ -30,6 +30,7 @@ export const InvoiceItemFields = Schema.Struct({
 
 export const Invoice = Schema.Struct({
   id: Schema.String,
+  name: Schema.String,
   fileName: Schema.String,
   contentType: Schema.String,
   createdAt: Schema.Number,

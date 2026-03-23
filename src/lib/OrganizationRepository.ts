@@ -43,6 +43,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       const upsertInvoice = Effect.fn("OrganizationRepository.upsertInvoice")(
         function* (input: {
           invoiceId: string;
+          name: string;
           fileName: string;
           contentType: string;
           r2ActionTime: number;
@@ -51,16 +52,17 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         }) {
           yield* sql`
             insert into Invoice (
-              id, fileName, contentType, createdAt, r2ActionTime,
+              id, name, fileName, contentType, createdAt, r2ActionTime,
               idempotencyKey, r2ObjectKey, status,
               extractedJson, error
             ) values (
-              ${input.invoiceId}, ${input.fileName}, ${input.contentType},
+              ${input.invoiceId}, ${input.name}, ${input.fileName}, ${input.contentType},
               ${input.r2ActionTime}, ${input.r2ActionTime}, ${input.idempotencyKey},
               ${input.r2ObjectKey}, 'uploaded',
               ${null}, ${null}
             )
             on conflict(id) do update set
+              name = excluded.name,
               fileName = excluded.fileName,
               contentType = excluded.contentType,
               r2ActionTime = excluded.r2ActionTime,

@@ -396,7 +396,7 @@ function RouteComponent() {
                     <TableRow>
                       <TableHead>File</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Uploaded</TableHead>
+                      <TableHead>Created</TableHead>
                       <TableHead className="w-35" />
                     </TableRow>
                 </TableHeader>
@@ -409,16 +409,17 @@ function RouteComponent() {
                       onClick={() =>{  setSelectedInvoiceId(invoice.id); }}
                     >
                       <TableCell className="flex items-center gap-2 font-medium">
-                        <FileText className="size-4 shrink-0 text-muted-foreground" />
-                        <a
-                          href={invoice.viewUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="truncate hover:underline"
-                          onClick={(e) =>{  e.stopPropagation(); }}
-                        >
-                          {invoice.fileName}
-                        </a>
+                        {invoice.viewUrl && (
+                          <a
+                            href={invoice.viewUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => { e.stopPropagation(); }}
+                          >
+                            <FileText className="size-4 shrink-0 text-muted-foreground hover:text-foreground" />
+                          </a>
+                        )}
+                        <span className="truncate">{invoice.name || invoice.fileName}</span>
                       </TableCell>
                       <TableCell>
                         <Badge variant={getStatusVariant(invoice.status)}>

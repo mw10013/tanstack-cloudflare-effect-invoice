@@ -69,6 +69,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     // - Layer construction is lazy (descriptions only, built at runPromise time)
     void this.sql`create table if not exists Invoice (
       id text primary key,
+      name text not null default '',
       fileName text not null,
       contentType text not null,
       createdAt integer not null,
@@ -154,7 +155,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
             existing.value.status === "extracted")
         )
           return;
-        yield* repo.upsertInvoice({ ...upload, r2ActionTime });
+        const name = upload.fileName.replace(/\.[^.]+$/, "");
+        yield* repo.upsertInvoice({ ...upload, name, r2ActionTime });
         yield* broadcastActivity(this, {
           level: "info",
           text: `Invoice uploaded: ${upload.fileName}`,
