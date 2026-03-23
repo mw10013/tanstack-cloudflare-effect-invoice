@@ -49,6 +49,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
           r2ActionTime: number;
           idempotencyKey: string;
           r2ObjectKey: string;
+          status: OrganizationDomain.InvoiceStatus;
         }) {
           yield* sql`
             insert into Invoice (
@@ -58,7 +59,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
             ) values (
               ${input.invoiceId}, ${input.name}, ${input.fileName}, ${input.contentType},
               ${input.r2ActionTime}, ${input.r2ActionTime}, ${input.idempotencyKey},
-              ${input.r2ObjectKey}, 'uploaded',
+              ${input.r2ObjectKey}, ${input.status},
               ${null}, ${null}
             )
             on conflict(id) do update set
@@ -68,7 +69,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
               r2ActionTime = excluded.r2ActionTime,
               idempotencyKey = excluded.idempotencyKey,
               r2ObjectKey = excluded.r2ObjectKey,
-              status = 'uploaded',
+              status = excluded.status,
               invoiceConfidence = 0,
               invoiceNumber = '',
               invoiceDate = '',
@@ -86,16 +87,6 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
               amountDue = '',
               extractedJson = null,
               error = null
-          `;
-        },
-      );
-
-      const setExtracting = Effect.fn("OrganizationRepository.setExtracting")(
-        function* (invoiceId: string, idempotencyKey: string) {
-          yield* sql`
-            update Invoice
-            set status = 'extracting'
-            where id = ${invoiceId} and idempotencyKey = ${idempotencyKey}
           `;
         },
       );
@@ -122,7 +113,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         }) {
           const updated = yield* sql`
             update Invoice
-            set status = 'extracted',
+            set status = 'ready',
                 invoiceConfidence = ${input.extracted.invoiceConfidence},
                 invoiceNumber = ${input.extracted.invoiceNumber},
                 invoiceDate = ${input.extracted.invoiceDate},
@@ -175,7 +166,6 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         getInvoices,
         getInvoiceItems,
         upsertInvoice,
-        setExtracting,
         deleteInvoice,
         saveExtraction,
         setError,

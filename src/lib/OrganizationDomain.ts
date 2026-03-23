@@ -1,10 +1,10 @@
 import * as Schema from "effect/Schema";
 
 export const InvoiceStatusValues = [
-  "uploaded",
   "extracting",
-  "extracted",
+  "ready",
   "error",
+  "deleted",
 ] as const;
 export const InvoiceStatus = Schema.Literals(InvoiceStatusValues);
 export type InvoiceStatus = typeof InvoiceStatus.Type;

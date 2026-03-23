@@ -152,11 +152,11 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           Option.isSome(existing) &&
           existing.value.idempotencyKey === upload.idempotencyKey &&
           (existing.value.status === "extracting" ||
-            existing.value.status === "extracted")
+            existing.value.status === "ready")
         )
           return;
         const name = upload.fileName.replace(/\.[^.]+$/, "");
-        yield* repo.upsertInvoice({ ...upload, name, r2ActionTime });
+        yield* repo.upsertInvoice({ ...upload, name, r2ActionTime, status: "extracting" });
         yield* broadcastActivity(this, {
           level: "info",
           text: `Invoice uploaded: ${upload.fileName}`,
@@ -182,7 +182,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
               message: cause instanceof Error ? cause.message : String(cause),
             }),
         });
-        yield* repo.setExtracting(upload.invoiceId, upload.idempotencyKey);
       }),
     );
   }

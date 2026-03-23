@@ -72,7 +72,7 @@ const getInvoiceItemsSchema = Schema.Struct({
 const getStatusVariant = (
   status: string,
 ): "default" | "destructive" | "secondary" => {
-  if (status === "extracted") return "default";
+  if (status === "ready") return "default";
   if (status === "error") return "destructive";
   return "secondary";
 };
@@ -322,7 +322,7 @@ function RouteComponent() {
       getInvoiceItemsFn({
         data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
       }),
-    enabled: selectedInvoice !== null && selectedInvoice.status === "extracted",
+    enabled: selectedInvoice !== null && selectedInvoice.status === "ready",
   });
 
   return (
@@ -522,7 +522,7 @@ function RouteComponent() {
                       </AlertDescription>
                     </Alert>
                   );
-                if (selectedInvoice.status !== "extracted")
+                if (selectedInvoice.status !== "ready")
                   return <p className="text-sm text-muted-foreground">Extraction in progress.</p>;
                 return (
                   <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">

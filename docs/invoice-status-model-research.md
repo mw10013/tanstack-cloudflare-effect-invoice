@@ -150,21 +150,10 @@ Proposed:
 
 ## Summary of Proposed Changes
 
+All items implemented:
+
 1. ~~**Move** `InvoiceStatus` + `InvoiceStatusValues` from Domain.ts → OrganizationDomain.ts~~ **DONE**
-2. **Replace** status values: `["uploaded", "extracting", "extracted", "error"]` → `["extracting", "ready", "error", "deleted"]`
-3. **Upload flow**: insert with `extracting` (remove `uploaded` intermediate step)
-4. **Manual create flow**: insert with `ready`
-5. **Soft delete** (future): set status to `deleted` instead of hard delete
-
-### Files That Need Changes
-
-| File | Change |
-|---|---|
-| ~~`src/lib/Domain.ts`~~ | ~~Remove InvoiceStatus, InvoiceStatusValues~~ **DONE** |
-| ~~`src/lib/OrganizationDomain.ts`~~ | ~~Add InvoiceStatus, InvoiceStatusValues~~ **DONE** (values still need updating) |
-| `src/lib/OrganizationRepository.ts` | `upsertInvoice`: status param instead of hardcoded "uploaded". Remove `setExtracting` (or repurpose). `saveExtraction`: set "ready" instead of "extracted". |
-| `src/organization-agent.ts` | `onInvoiceUpload`: insert with "extracting", remove separate setExtracting call |
-| `src/routes/app.$organizationId.invoices.tsx` | Badge logic: "ready" instead of "extracted". Detail view condition. |
-| `src/invoice-extraction-workflow.ts` | No change (doesn't reference status values directly) |
-
-<!-- REVIEW: Anything missing from this change list? -->
+2. ~~**Replace** status values: `["uploaded", "extracting", "extracted", "error"]` → `["extracting", "ready", "error", "deleted"]`~~ **DONE**
+3. ~~**Upload flow**: insert with `extracting` (remove `uploaded` intermediate step)~~ **DONE**
+4. **Manual create flow**: insert with `ready` — deferred
+5. **Soft delete**: set status to `deleted` instead of hard delete — deferred
