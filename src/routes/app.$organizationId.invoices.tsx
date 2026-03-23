@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createFileRoute,
   useHydrated,
@@ -8,7 +8,7 @@ import {
 import { createServerFn, useServerFn } from "@tanstack/react-start";
 import { Cause, Config, Effect, Redacted } from "effect";
 import * as Schema from "effect/Schema";
-import { AlertCircle, Copy, FileText, Loader2, Trash2, Upload } from "lucide-react";
+import { AlertCircle, Copy, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -104,7 +104,9 @@ const getInvoices = createServerFn({ method: "GET" })
         if (environment === "local") {
           return invoices.map((invoice) => ({
             ...invoice,
-            viewUrl: `/api/org/${organizationId}/invoice/${encodeURIComponent(invoice.id)}`,
+            viewUrl: invoice.r2ObjectKey
+              ? `/api/org/${organizationId}/invoice/${encodeURIComponent(invoice.id)}`
+              : undefined,
           }));
         }
         const r2BucketName = yield* Config.nonEmptyString("R2_BUCKET_NAME");
@@ -112,27 +114,30 @@ const getInvoices = createServerFn({ method: "GET" })
         const r2S3SecretAccessKey =
           yield* Config.redacted("R2_S3_SECRET_ACCESS_KEY");
         const cfAccountId = yield* Config.nonEmptyString("CF_ACCOUNT_ID");
-        return yield* Effect.tryPromise(async () => {
-          const { AwsClient } = await import("aws4fetch");
-          const client = new AwsClient({
-            service: "s3",
-            region: "auto",
-            accessKeyId: Redacted.value(r2S3AccessKeyId),
-            secretAccessKey: Redacted.value(r2S3SecretAccessKey),
-          });
-          return Promise.all(
-            invoices.map(async (invoice) => {
-              const signed = await client.sign(
-                new Request(
-                  `https://${cfAccountId}.r2.cloudflarestorage.com/${r2BucketName}/${invoice.r2ObjectKey}?X-Amz-Expires=900`,
-                  { method: "GET" },
-                ),
-                { aws: { signQuery: true } },
-              );
-              return { ...invoice, viewUrl: signed.url };
-            }),
-          );
+        const { AwsClient } = yield* Effect.tryPromise(() => import("aws4fetch"));
+        const client = new AwsClient({
+          service: "s3",
+          region: "auto",
+          accessKeyId: Redacted.value(r2S3AccessKeyId),
+          secretAccessKey: Redacted.value(r2S3SecretAccessKey),
         });
+        return yield* Effect.all(
+          invoices.map((invoice) =>
+            invoice.r2ObjectKey
+              ? Effect.tryPromise(async () => {
+                  const signed = await client.sign(
+                    new Request(
+                      `https://${cfAccountId}.r2.cloudflarestorage.com/${r2BucketName}/${invoice.r2ObjectKey}?X-Amz-Expires=900`,
+                      { method: "GET" },
+                    ),
+                    { aws: { signQuery: true } },
+                  );
+                  return { ...invoice, viewUrl: signed.url as string | undefined };
+                })
+              : Effect.succeed({ ...invoice, viewUrl: undefined as string | undefined }),
+          ),
+          { concurrency: 10 },
+        );
       }),
     ),
   );
@@ -212,6 +217,29 @@ const deleteInvoice = createServerFn({ method: "POST" })
     ),
   );
 
+const createInvoice = createServerFn({ method: "POST" }).handler(
+  ({ context: { runEffect } }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const request = yield* AppRequest;
+        const auth = yield* Auth;
+        const validSession = yield* auth
+          .getSession(request.headers)
+          .pipe(Effect.flatMap(Effect.fromOption));
+        const organizationId = yield* Effect.fromNullishOr(
+          validSession.session.activeOrganizationId,
+        );
+        const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
+        const id = ORGANIZATION_AGENT.idFromName(organizationId);
+        const stub = ORGANIZATION_AGENT.get(id);
+        const { invoiceId } = yield* Effect.tryPromise(() =>
+          stub.createInvoice(),
+        );
+        return { invoiceId };
+      }),
+    ),
+);
+
 const getInvoiceItems = createServerFn({ method: "GET" })
   .inputValidator(Schema.toStandardSchemaV1(getInvoiceItemsSchema))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
@@ -247,6 +275,7 @@ function RouteComponent() {
   const { organizationId } = Route.useParams();
   const isHydrated = useHydrated();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = React.useState<string | null>(
     null,
@@ -290,6 +319,17 @@ function RouteComponent() {
     onSuccess: () => {
       if (fileInputRef.current) fileInputRef.current.value = "";
       void router.invalidate();
+    },
+  });
+
+  const createInvoiceServerFn = useServerFn(createInvoice);
+  const createMutation = useMutation({
+    mutationFn: () => createInvoiceServerFn({ data: undefined }),
+    onSuccess: (result) => {
+      setSelectedInvoiceId(result.invoiceId);
+      void queryClient.invalidateQueries({
+        queryKey: invoicesQueryKey(organizationId),
+      });
     },
   });
 
@@ -360,6 +400,20 @@ function RouteComponent() {
                   )}
                   {uploadMutation.isPending ? "Uploading..." : "Upload"}
                 </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!isHydrated || createMutation.isPending}
+                  onClick={() => { createMutation.mutate(); }}
+                >
+                  {createMutation.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Plus className="size-4" />
+                  )}
+                  New Invoice
+                </Button>
               </form>
             </div>
             {uploadMutation.error && (
@@ -410,6 +464,20 @@ function RouteComponent() {
                       <Upload className="size-4" />
                     )}
                     {uploadMutation.isPending ? "Uploading..." : "Upload"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!isHydrated || createMutation.isPending}
+                    onClick={() => { createMutation.mutate(); }}
+                  >
+                    {createMutation.isPending ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Plus className="size-4" />
+                    )}
+                    New Invoice
                   </Button>
                 </form>
               </div>

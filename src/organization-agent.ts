@@ -70,12 +70,12 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     void this.sql`create table if not exists Invoice (
       id text primary key,
       name text not null default '',
-      fileName text not null,
-      contentType text not null,
-      createdAt integer not null,
-      r2ActionTime integer not null,
-      idempotencyKey text not null unique,
-      r2ObjectKey text not null,
+      fileName text not null default '',
+      contentType text not null default '',
+      createdAt integer not null default (unixepoch() * 1000),
+      r2ActionTime integer,
+      idempotencyKey text unique,
+      r2ObjectKey text not null default '',
       status text not null,
       invoiceConfidence real not null default 0,
       invoiceNumber text not null default '',
@@ -139,6 +139,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
         const existing = yield* repo.findInvoice(upload.invoiceId);
         if (
           Option.isSome(existing) &&
+          existing.value.r2ActionTime !== null &&
           r2ActionTime < existing.value.r2ActionTime
         )
           return;
@@ -150,6 +151,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           return;
         if (
           Option.isSome(existing) &&
+          existing.value.idempotencyKey !== null &&
           existing.value.idempotencyKey === upload.idempotencyKey &&
           (existing.value.status === "extracting" ||
             existing.value.status === "ready")
@@ -182,6 +184,22 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
               message: cause instanceof Error ? cause.message : String(cause),
             }),
         });
+      }),
+    );
+  }
+
+  @callable()
+  createInvoice() {
+    return this.runEffect(
+      Effect.gen({ self: this }, function* () {
+        const repo = yield* OrganizationRepository;
+        const invoiceId: string = crypto.randomUUID();
+        yield* repo.createInvoice(invoiceId);
+        yield* broadcastActivity(this, {
+          level: "info",
+          text: "Invoice created",
+        });
+        return { invoiceId };
       }),
     );
   }

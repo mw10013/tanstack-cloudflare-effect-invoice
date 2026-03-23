@@ -53,12 +53,12 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         }) {
           yield* sql`
             insert into Invoice (
-              id, name, fileName, contentType, createdAt, r2ActionTime,
+              id, name, fileName, contentType, r2ActionTime,
               idempotencyKey, r2ObjectKey, status,
               extractedJson, error
             ) values (
               ${input.invoiceId}, ${input.name}, ${input.fileName}, ${input.contentType},
-              ${input.r2ActionTime}, ${input.r2ActionTime}, ${input.idempotencyKey},
+              ${input.r2ActionTime}, ${input.idempotencyKey},
               ${input.r2ObjectKey}, ${input.status},
               ${null}, ${null}
             )
@@ -162,11 +162,21 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
+      const createInvoice = Effect.fn("OrganizationRepository.createInvoice")(
+        function* (invoiceId: string) {
+          yield* sql`
+            insert into Invoice (id, name, status)
+            values (${invoiceId}, ${"Untitled Invoice"}, ${"ready"})
+          `;
+        },
+      );
+
       return {
         findInvoice,
         getInvoices,
         getInvoiceItems,
         upsertInvoice,
+        createInvoice,
         softDeleteInvoice,
         saveExtraction,
         setError,
