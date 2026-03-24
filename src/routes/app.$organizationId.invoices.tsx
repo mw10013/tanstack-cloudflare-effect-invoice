@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
+import type { InvoiceWithItems } from "@/lib/OrganizationDomain";
 import { useOrganizationAgent } from "@/lib/OrganizationAgentContext";
 import { Request as AppRequest } from "@/lib/Request";
 
@@ -38,7 +39,7 @@ const organizationIdSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
 });
 
-const getInvoiceItemsSchema = Schema.Struct({
+const getInvoiceWithItemsSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
   invoiceId: Schema.NonEmptyString,
 });
@@ -54,8 +55,8 @@ const getStatusVariant = (
 const invoicesQueryKey = (organizationId: string) =>
   ["organization", organizationId, "invoices"] as const;
 
-const invoiceItemsQueryKey = (organizationId: string, invoiceId: string) =>
-  ["organization", organizationId, "invoiceItems", invoiceId] as const;
+const invoiceQueryKey = (organizationId: string, invoiceId: string) =>
+  ["organization", organizationId, "invoice", invoiceId] as const;
 
 const getInvoices = createServerFn({ method: "GET" })
   .inputValidator(Schema.toStandardSchemaV1(organizationIdSchema))
@@ -117,8 +118,8 @@ const getInvoices = createServerFn({ method: "GET" })
     ),
   );
 
-const getInvoiceItems = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(getInvoiceItemsSchema))
+const getInvoiceWithItems = createServerFn({ method: "GET" })
+  .inputValidator(Schema.toStandardSchemaV1(getInvoiceWithItemsSchema))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
     runEffect(
       Effect.gen(function* () {
@@ -134,17 +135,33 @@ const getInvoiceItems = createServerFn({ method: "GET" })
         const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
         const id = ORGANIZATION_AGENT.idFromName(organizationId);
         const stub = ORGANIZATION_AGENT.get(id);
-        return yield* Effect.tryPromise(() => stub.getInvoiceItems(invoiceId));
+        const invoice: InvoiceWithItems = yield* Effect.tryPromise(() =>
+          stub.getInvoiceWithItems(invoiceId),
+        );
+        return structuredClone(invoice);
       }),
     ),
   );
 
+type InvoiceListItem = Awaited<ReturnType<typeof getInvoices>>[number];
+
 export const Route = createFileRoute("/app/$organizationId/invoices")({
-  loader: ({ params: { organizationId }, context }) =>
-    context.queryClient.ensureQueryData({
+  loader: async ({ params: { organizationId }, context }) => {
+    const invoices = await context.queryClient.ensureQueryData({
       queryKey: invoicesQueryKey(organizationId),
       queryFn: () => getInvoices({ data: { organizationId } }),
-    }),
+    });
+    const firstInvoiceId = invoices[0]?.id;
+    if (firstInvoiceId) {
+      await context.queryClient.ensureQueryData({
+        queryKey: invoiceQueryKey(organizationId, firstInvoiceId),
+        queryFn: () =>
+          getInvoiceWithItems({
+            data: { organizationId, invoiceId: firstInvoiceId },
+          }),
+      });
+    }
+  },
   component: RouteComponent,
 });
 
@@ -218,18 +235,21 @@ function RouteComponent() {
       stub.softDeleteInvoice(invoiceId),
   });
 
-  const getInvoiceItemsFn = useServerFn(getInvoiceItems);
-  const invoiceItemsQuery = useQuery({
+  const getInvoiceWithItemsFn = useServerFn(getInvoiceWithItems);
+  const invoiceQuery = useQuery<InvoiceWithItems>({
     queryKey: [
-      ...invoiceItemsQueryKey(organizationId, selectedInvoice?.id ?? ""),
-      getInvoiceItemsFn,
+      ...invoiceQueryKey(organizationId, selectedInvoice?.id ?? ""),
+      getInvoiceWithItemsFn,
     ],
     queryFn: () =>
-      getInvoiceItemsFn({
+      getInvoiceWithItemsFn({
         data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
       }),
     enabled: selectedInvoice !== null && selectedInvoice.status === "ready",
   });
+  const invoice: InvoiceWithItems | null = invoiceQuery.data ?? null;
+  const displayedInvoice: InvoiceWithItems | InvoiceListItem | null =
+    selectedInvoice?.status === "ready" ? invoice ?? selectedInvoice : selectedInvoice;
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -437,44 +457,44 @@ function RouteComponent() {
             </CardHeader>
             <CardContent>
               {(() => {
-                if (selectedInvoice === null)
+                if (displayedInvoice === null)
                   return <p className="text-sm text-muted-foreground">No invoice selected.</p>;
-                if (selectedInvoice.status === "deleted")
+                if (displayedInvoice.status === "deleted")
                   return <p className="text-sm text-muted-foreground">This invoice has been deleted.</p>;
-                if (selectedInvoice.status === "error")
+                if (displayedInvoice.status === "error")
                   return (
                     <Alert variant="destructive">
                       <AlertCircle className="size-4" />
                       <AlertTitle>Extraction failed</AlertTitle>
                       <AlertDescription>
-                        {selectedInvoice.error ?? "Unknown extraction error"}
+                        {displayedInvoice.error ?? "Unknown extraction error"}
                       </AlertDescription>
                     </Alert>
                   );
-                if (selectedInvoice.status !== "ready")
+                if (displayedInvoice.status !== "ready")
                   return <p className="text-sm text-muted-foreground">Extraction in progress.</p>;
                 return (
                   <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
                     <div className="flex flex-col gap-5">
                       <div className="flex items-start justify-between gap-4">
                         <div>
-                          <p className="text-lg font-semibold">{selectedInvoice.vendorName || "—"}</p>
-                          <p className="whitespace-pre-line text-sm text-muted-foreground">{selectedInvoice.vendorAddress || "—"}</p>
-                          {selectedInvoice.vendorEmail && (
-                            <p className="text-sm text-muted-foreground">{selectedInvoice.vendorEmail}</p>
+                          <p className="text-lg font-semibold">{displayedInvoice.vendorName || "—"}</p>
+                          <p className="whitespace-pre-line text-sm text-muted-foreground">{displayedInvoice.vendorAddress || "—"}</p>
+                          {displayedInvoice.vendorEmail && (
+                            <p className="text-sm text-muted-foreground">{displayedInvoice.vendorEmail}</p>
                           )}
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-medium">Invoice #{selectedInvoice.invoiceNumber || "—"}</p>
-                          {selectedInvoice.invoiceDate && (
-                            <p className="text-sm text-muted-foreground">Date: {selectedInvoice.invoiceDate}</p>
-                          )}
-                          {selectedInvoice.dueDate && (
-                            <p className="text-sm text-muted-foreground">Due: {selectedInvoice.dueDate}</p>
-                          )}
-                          {selectedInvoice.currency && (
-                            <p className="text-sm text-muted-foreground">Currency: {selectedInvoice.currency}</p>
-                          )}
+                           <p className="text-sm font-medium">Invoice #{displayedInvoice.invoiceNumber || "—"}</p>
+                           {displayedInvoice.invoiceDate && (
+                             <p className="text-sm text-muted-foreground">Date: {displayedInvoice.invoiceDate}</p>
+                           )}
+                           {displayedInvoice.dueDate && (
+                             <p className="text-sm text-muted-foreground">Due: {displayedInvoice.dueDate}</p>
+                           )}
+                           {displayedInvoice.currency && (
+                             <p className="text-sm text-muted-foreground">Currency: {displayedInvoice.currency}</p>
+                           )}
                         </div>
                       </div>
 
@@ -482,24 +502,24 @@ function RouteComponent() {
 
                       <div>
                         <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">Bill To</p>
-                        <p className="text-sm font-medium">{selectedInvoice.billToName || "—"}</p>
-                        <p className="whitespace-pre-line text-sm text-muted-foreground">{selectedInvoice.billToAddress || "—"}</p>
-                        {selectedInvoice.billToEmail && (
-                          <p className="text-sm text-muted-foreground">{selectedInvoice.billToEmail}</p>
+                        <p className="text-sm font-medium">{displayedInvoice.billToName || "—"}</p>
+                        <p className="whitespace-pre-line text-sm text-muted-foreground">{displayedInvoice.billToAddress || "—"}</p>
+                        {displayedInvoice.billToEmail && (
+                          <p className="text-sm text-muted-foreground">{displayedInvoice.billToEmail}</p>
                         )}
                       </div>
 
                       <Separator />
 
                       {(() => {
-                        if (invoiceItemsQuery.isLoading)
+                        if (invoiceQuery.isLoading)
                           return (
                             <div className="flex items-center gap-2 text-sm text-muted-foreground">
                               <Loader2 className="size-4 animate-spin" />
                               Loading line items...
                             </div>
                           );
-                        if (invoiceItemsQuery.data && invoiceItemsQuery.data.length > 0)
+                        if (invoice && invoice.items.length > 0)
                           return (
                             <Table>
                               <TableHeader>
@@ -511,7 +531,7 @@ function RouteComponent() {
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {invoiceItemsQuery.data.map((item) => (
+                                {invoice.items.map((item: InvoiceWithItems["items"][number]) => (
                                   <TableRow key={item.id}>
                                     <TableCell>
                                       <p>{item.description || "—"}</p>
@@ -533,28 +553,28 @@ function RouteComponent() {
                       <Separator />
 
                       <div className="flex flex-col items-end gap-1 text-sm">
-                        {selectedInvoice.subtotal && (
+                        {displayedInvoice.subtotal && (
                           <div className="flex gap-8">
                             <span className="text-muted-foreground">Subtotal</span>
-                            <span>{selectedInvoice.subtotal}</span>
+                            <span>{displayedInvoice.subtotal}</span>
                           </div>
                         )}
-                        {selectedInvoice.tax && (
+                        {displayedInvoice.tax && (
                           <div className="flex gap-8">
                             <span className="text-muted-foreground">Tax</span>
-                            <span>{selectedInvoice.tax}</span>
+                            <span>{displayedInvoice.tax}</span>
                           </div>
                         )}
-                        {selectedInvoice.total && (
+                        {displayedInvoice.total && (
                           <div className="flex gap-8">
                             <span className="font-medium">Total</span>
-                            <span className="font-medium">{selectedInvoice.total}</span>
+                            <span className="font-medium">{displayedInvoice.total}</span>
                           </div>
                         )}
-                        {selectedInvoice.amountDue && (
+                        {displayedInvoice.amountDue && (
                           <div className="mt-1 flex gap-8 border-t pt-1">
                             <span className="font-semibold">Amount Due</span>
-                            <span className="font-semibold">{selectedInvoice.amountDue}</span>
+                            <span className="font-semibold">{displayedInvoice.amountDue}</span>
                           </div>
                         )}
                       </div>
@@ -563,14 +583,14 @@ function RouteComponent() {
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center justify-between gap-3">
                         <h4 className="text-sm font-medium">Extracted JSON</h4>
-                        {selectedInvoice.extractedJson && (
+                        {displayedInvoice.extractedJson && (
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                              if (selectedInvoice.extractedJson) {
-                                void copyText(selectedInvoice.extractedJson, "json");
+                              if (displayedInvoice.extractedJson) {
+                                void copyText(displayedInvoice.extractedJson, "json");
                               }
                             }}
                           >
@@ -579,9 +599,9 @@ function RouteComponent() {
                           </Button>
                         )}
                       </div>
-                      {selectedInvoice.extractedJson ? (
+                      {displayedInvoice.extractedJson ? (
                         <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
-                          {JSON.stringify(JSON.parse(selectedInvoice.extractedJson), null, 2)}
+                          {JSON.stringify(JSON.parse(displayedInvoice.extractedJson), null, 2)}
                         </pre>
                       ) : (
                         <p className="text-sm text-muted-foreground">No extracted data.</p>

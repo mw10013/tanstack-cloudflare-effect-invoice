@@ -59,6 +59,12 @@ export const InvoiceItem = Schema.Struct({
 });
 export type InvoiceItem = typeof InvoiceItem.Type;
 
+export const InvoiceWithItems = Schema.Struct({
+  ...Invoice.fields,
+  items: Schema.Array(InvoiceItem),
+});
+export type InvoiceWithItems = typeof InvoiceWithItems.Type;
+
 export class OrganizationAgentError extends Schema.TaggedErrorClass<OrganizationAgentError>()(
   "OrganizationAgentError",
   { message: Schema.String },

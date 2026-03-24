@@ -2,13 +2,14 @@ import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as OrganizationDomain from "./OrganizationDomain";
+import { DataFromResult } from "./SchemaEx";
 
 const decodeInvoice = Schema.decodeUnknownEffect(OrganizationDomain.Invoice);
 const decodeInvoices = Schema.decodeUnknownEffect(
   Schema.mutable(Schema.Array(OrganizationDomain.Invoice)),
 );
-const decodeInvoiceItems = Schema.decodeUnknownEffect(
-  Schema.mutable(Schema.Array(OrganizationDomain.InvoiceItem)),
+const decodeInvoiceWithItems = Schema.decodeUnknownEffect(
+  DataFromResult(OrganizationDomain.InvoiceWithItems),
 );
 
 export class OrganizationRepository extends ServiceMap.Service<OrganizationRepository>()(
@@ -33,12 +34,68 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
-      const getInvoiceItems = Effect.fn("OrganizationRepository.getInvoiceItems")(
-        function* (invoiceId: string) {
-          const rows = yield* sql`select * from InvoiceItem where invoiceId = ${invoiceId} order by "order" asc`;
-          return yield* decodeInvoiceItems(rows);
-        },
-      );
+      const getInvoiceWithItems = Effect.fn(
+        "OrganizationRepository.getInvoiceWithItems",
+      )(function* (invoiceId: string) {
+        const rows = yield* sql`
+          select json_object(
+            'id', i.id,
+            'name', i.name,
+            'fileName', i.fileName,
+            'contentType', i.contentType,
+            'createdAt', i.createdAt,
+            'r2ActionTime', i.r2ActionTime,
+            'idempotencyKey', i.idempotencyKey,
+            'r2ObjectKey', i.r2ObjectKey,
+            'status', i.status,
+            'invoiceConfidence', i.invoiceConfidence,
+            'invoiceNumber', i.invoiceNumber,
+            'invoiceDate', i.invoiceDate,
+            'dueDate', i.dueDate,
+            'currency', i.currency,
+            'vendorName', i.vendorName,
+            'vendorEmail', i.vendorEmail,
+            'vendorAddress', i.vendorAddress,
+            'billToName', i.billToName,
+            'billToEmail', i.billToEmail,
+            'billToAddress', i.billToAddress,
+            'subtotal', i.subtotal,
+            'tax', i.tax,
+            'total', i.total,
+            'amountDue', i.amountDue,
+            'extractedJson', i.extractedJson,
+            'error', i.error,
+            'items', coalesce(
+              (
+                select json_group_array(
+                  json_object(
+                    'id', ii.id,
+                    'invoiceId', ii.invoiceId,
+                    'order', ii."order",
+                    'description', ii.description,
+                    'quantity', ii.quantity,
+                    'unitPrice', ii.unitPrice,
+                    'amount', ii.amount,
+                    'period', ii.period
+                  )
+                )
+                from (
+                  select *
+                  from InvoiceItem
+                  where invoiceId = i.id
+                  order by "order" asc
+                ) as ii
+              ),
+              json('[]')
+            )
+          ) as data
+          from Invoice i
+          where i.id = ${invoiceId}
+        `;
+        return yield* Effect.fromNullishOr(rows[0]).pipe(
+          Effect.flatMap(decodeInvoiceWithItems),
+        );
+      });
 
       const upsertInvoice = Effect.fn("OrganizationRepository.upsertInvoice")(
         function* (input: {
@@ -174,7 +231,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       return {
         findInvoice,
         getInvoices,
-        getInvoiceItems,
+        getInvoiceWithItems,
         upsertInvoice,
         createInvoice,
         softDeleteInvoice,
