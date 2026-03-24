@@ -178,7 +178,11 @@ For line items, start with simple row CRUD:
 
 I would not add drag-and-drop reorder in the first pass. The schema already supports ordering via `"order"`, but add/delete is the main need right now.
 
-Careful about order. It's floating point number and should only be used for ordering at the database level. We are using property of reals for ordering. I don't think we should display it as a value, right?
+Note on `order`:
+
+- `InvoiceItem.order` should stay an internal persistence detail only
+- it should not be shown or edited in the UI
+- the edit form should treat item order as array position, then map that back to DB ordering on save
 
 ## Data / Mutation Recommendation
 
@@ -322,19 +326,29 @@ My recommendation for this feature:
 
 1. Should the invoices list keep its current master-detail layout after the dedicated page exists, or should row click eventually become navigation?
 
-Keep for now.
+Recommendation: keep the current master-detail list for now.
 
 2. Should the edit page cover all invoice fields immediately, or should v1 focus on name + line items + a few core metadata fields?
 
-all invoice fields that belong to invoice. also name.
+Recommendation: cover all invoice-owned fields in v1, including `name`.
 
 3. On save of an `error` invoice, should status stay `error` until manually changed, or should manual save normalize it back to `ready`?
 
-I don't think we understand error enough. It's basically a catch all for any error. I suppose if there's an extraction error, we don't have a way to retry. I'm not sure if we should at this point. Kind of a can of worms. I don't want to add retry behavior now. Maybe allowing edit and saving clears the error.
+Recommendation: do not add retry behavior now. Treat `error` as a catch-all failure state. If a user manually edits and saves an errored invoice successfully, the save should clear the error and normalize the invoice back to `ready`.
 
 4. Do we want delete available on the edit page header too, or keep destructive actions in the list only?
 
-Keep it simple. No delete here.
+Recommendation: keep delete out of the edit page header. Keep destructive actions in the list view only.
+
+## Updated Decisions
+
+- keep the existing invoices index as a master-detail page
+- add a dedicated edit route at `src/routes/app.$organizationId.invoices.$invoiceId.tsx`
+- include all invoice-owned fields in the first edit page, not a partial subset
+- keep `InvoiceItem.order` internal and derive it from UI row order during save
+- if an `error` invoice is manually saved successfully, clear `error` and set status back to `ready`
+- do not add retry behavior in this feature
+- do not add delete to the edit page header in v1
 
 ## Recommended v1 Scope
 
@@ -343,7 +357,7 @@ If we want the smallest useful cut, I would build this in this order:
 1. route: `src/routes/app.$organizationId.invoices.$invoiceId.tsx`
 2. entry point: `Edit invoice` button in the current invoice card
 3. loader: fetch invoice + items for direct page loads
-4. form: invoice name + core invoice fields + line item add/delete, powered by `InvoiceWithItems`
+4. form: invoice name + all invoice-owned fields + line item add/delete, powered by `InvoiceWithItems`
 5. mutation: single `updateInvoice` save
 6. create flow: navigate new invoices straight into the editor
 
