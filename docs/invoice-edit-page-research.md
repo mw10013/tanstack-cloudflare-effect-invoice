@@ -178,6 +178,8 @@ For line items, start with simple row CRUD:
 
 I would not add drag-and-drop reorder in the first pass. The schema already supports ordering via `"order"`, but add/delete is the main need right now.
 
+Careful about order. It's floating point number and should only be used for ordering at the database level. We are using property of reals for ordering. I don't think we should display it as a value, right?
+
 ## Data / Mutation Recommendation
 
 Recommended first API shape:
@@ -319,9 +321,20 @@ My recommendation for this feature:
 ## Open Design Choices To Review
 
 1. Should the invoices list keep its current master-detail layout after the dedicated page exists, or should row click eventually become navigation?
+
+Keep for now.
+
 2. Should the edit page cover all invoice fields immediately, or should v1 focus on name + line items + a few core metadata fields?
+
+all invoice fields that belong to invoice. also name.
+
 3. On save of an `error` invoice, should status stay `error` until manually changed, or should manual save normalize it back to `ready`?
+
+I don't think we understand error enough. It's basically a catch all for any error. I suppose if there's an extraction error, we don't have a way to retry. I'm not sure if we should at this point. Kind of a can of worms. I don't want to add retry behavior now. Maybe allowing edit and saving clears the error.
+
 4. Do we want delete available on the edit page header too, or keep destructive actions in the list only?
+
+Keep it simple. No delete here.
 
 ## Recommended v1 Scope
 
