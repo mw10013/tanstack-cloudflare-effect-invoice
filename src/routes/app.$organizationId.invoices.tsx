@@ -294,7 +294,8 @@ function RouteComponent() {
   });
 
   const createInvoiceServerFn = useServerFn(createInvoice);
-  const createMutation = useMutation({
+  const createInvoiceMutation
+   = useMutation({
     mutationFn: () => createInvoiceServerFn({ data: undefined }),
     onSuccess: (result) => {
       setSelectedInvoiceId(result.invoiceId);
@@ -305,7 +306,7 @@ function RouteComponent() {
   });
 
   const { stub } = useOrganizationAgent();
-  const deleteMutation = useMutation({
+  const softDeleteInvoiceMutation = useMutation({
     mutationFn: ({ invoiceId }: { invoiceId: string }) =>
       stub.softDeleteInvoice(invoiceId),
   });
@@ -372,10 +373,10 @@ function RouteComponent() {
                   type="button"
                   size="sm"
                   variant="outline"
-                  disabled={!isHydrated || createMutation.isPending}
-                  onClick={() => { createMutation.mutate(); }}
+                  disabled={!isHydrated || createInvoiceMutation.isPending}
+                  onClick={() => { createInvoiceMutation.mutate(); }}
                 >
-                  {createMutation.isPending ? (
+                  {createInvoiceMutation.isPending ? (
                     <Loader2 className="size-4 animate-spin" />
                   ) : (
                     <Plus className="size-4" />
@@ -437,10 +438,10 @@ function RouteComponent() {
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={!isHydrated || createMutation.isPending}
-                    onClick={() => { createMutation.mutate(); }}
+                    disabled={!isHydrated || createInvoiceMutation.isPending}
+                    onClick={() => { createInvoiceMutation.mutate(); }}
                   >
-                    {createMutation.isPending ? (
+                    {createInvoiceMutation.isPending ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
                       <Plus className="size-4" />
@@ -508,9 +509,9 @@ function RouteComponent() {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
-                              deleteMutation.mutate({ invoiceId: invoice.id });
+                              softDeleteInvoiceMutation.mutate({ invoiceId: invoice.id });
                             }}
-                            disabled={deleteMutation.isPending}
+                            disabled={softDeleteInvoiceMutation.isPending}
                           >
                             <Trash2 className="size-4" />
                           </Button>
