@@ -15,11 +15,22 @@ The current invoice UI is a master-detail page at `src/routes/app.$organizationI
 
 ```tsx
 export const Route = createFileRoute("/app/$organizationId/invoices")({
-  loader: ({ params: { organizationId }, context }) =>
-    context.queryClient.ensureQueryData({
+  loader: async ({ params: { organizationId }, context }) => {
+    const invoices = await context.queryClient.ensureQueryData({
       queryKey: invoicesQueryKey(organizationId),
       queryFn: () => getInvoices({ data: { organizationId } }),
-    }),
+    });
+    const firstInvoiceId = invoices[0]?.id;
+    if (firstInvoiceId) {
+      await context.queryClient.ensureQueryData({
+        queryKey: invoiceQueryKey(organizationId, firstInvoiceId),
+        queryFn: () =>
+          getInvoiceWithItems({
+            data: { organizationId, invoiceId: firstInvoiceId },
+          }),
+      });
+    }
+  },
   component: RouteComponent,
 });
 ```
@@ -35,7 +46,7 @@ The list row currently does selection, not navigation:
 >
 ```
 
-The only invoice actions exposed from the agent right now are create, upload, delete, list, and list-items.
+The invoice data API was recently refactored to expose a richer invoice read model. The agent now exposes create, upload, delete, list, and get-invoice-with-items.
 
 From `src/organization-agent.ts`:
 
@@ -53,20 +64,30 @@ softDeleteInvoice(invoiceId: string)
 getInvoices()
 
 @callable()
-getInvoiceItems(invoiceId: string)
+getInvoiceWithItems(invoiceId: string)
 ```
 
 There is no user-driven update method yet.
 
-The repository already has the right shape for full item replacement during save. From `src/lib/OrganizationRepository.ts`:
+The repository already has the right shape for direct invoice loads and full item replacement during save. From `src/lib/OrganizationRepository.ts`:
 
 ```ts
-const getInvoiceItems = Effect.fn("OrganizationRepository.getInvoiceItems")(
-  function* (invoiceId: string) {
-    const rows = yield* sql`select * from InvoiceItem where invoiceId = ${invoiceId} order by "order" asc`;
-    return yield* decodeInvoiceItems(rows);
-  },
-);
+const getInvoiceWithItems = Effect.fn(
+  "OrganizationRepository.getInvoiceWithItems",
+)(function* (invoiceId: string) {
+  const rows = yield* sql`
+    select json_object(
+      'id', i.id,
+      ...,
+      'items', coalesce((...), json('[]'))
+    ) as data
+    from Invoice i
+    where i.id = ${invoiceId}
+  `;
+  return yield* Effect.fromNullishOr(rows[0]).pipe(
+    Effect.flatMap(decodeInvoiceWithItems),
+  );
+});
 
 // existing extraction save path
 yield* sql`delete from InvoiceItem where invoiceId = ${input.invoiceId}`;
@@ -82,6 +103,8 @@ for (let i = 0; i < input.invoiceItems.length; i++) {
 ```
 
 That strongly suggests an edit submit can save the full invoice item array in one transaction instead of introducing separate item add/delete endpoints first.
+
+It also means the app already has an `invoiceQueryKey(organizationId, invoiceId)`-style detail query in the index route, which makes a dedicated invoice route a more natural next step than before.
 
 ## Routing Recommendation
 
@@ -120,6 +143,7 @@ Why:
 - current row click already means "select this invoice"
 - adding navigation directly to the row creates mixed row semantics
 - the selected detail card is where the user already confirms "this is the invoice I want"
+- the refactor keeps the current page optimized for selection + prefetch, so adding a button is the least disruptive bridge into a dedicated route
 - it is the smallest change for a first pass
 
 Suggested follow-up, not required for v1:
@@ -201,11 +225,13 @@ Implementation shape:
 - `OrganizationRepository.findInvoice(invoiceId)` already exists and is useful for direct route loads
 - add `OrganizationRepository.updateInvoice(...)`
 - add `OrganizationAgent.updateInvoice(...)`
-- create a server fn for auth + organization guard, same pattern as `getInvoices` and `getInvoiceItems`
+- create a server fn for auth + organization guard, same pattern as `getInvoices` and `getInvoiceWithItems`
 - after save, invalidate:
   - `invoicesQueryKey(organizationId)`
-  - `invoiceItemsQueryKey(organizationId, invoiceId)`
+  - `invoiceQueryKey(organizationId, invoiceId)`
 - broadcast an activity message like `Invoice updated`
+
+Because the read side already centers on `InvoiceWithItems`, I would keep the write side aligned with that same shape: fetch one invoice aggregate, edit one aggregate, save one aggregate.
 
 ## Loader Recommendation
 
@@ -304,7 +330,7 @@ If we want the smallest useful cut, I would build this in this order:
 1. route: `src/routes/app.$organizationId.invoices.$invoiceId.tsx`
 2. entry point: `Edit invoice` button in the current invoice card
 3. loader: fetch invoice + items for direct page loads
-4. form: invoice name + core invoice fields + line item add/delete
+4. form: invoice name + core invoice fields + line item add/delete, powered by `InvoiceWithItems`
 5. mutation: single `updateInvoice` save
 6. create flow: navigate new invoices straight into the editor
 
