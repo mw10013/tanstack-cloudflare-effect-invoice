@@ -188,29 +188,6 @@ const uploadInvoice = createServerFn({ method: "POST" })
     ),
   );
 
-const createInvoice = createServerFn({ method: "POST" }).handler(
-  ({ context: { runEffect } }) =>
-    runEffect(
-      Effect.gen(function* () {
-        const request = yield* AppRequest;
-        const auth = yield* Auth;
-        const validSession = yield* auth
-          .getSession(request.headers)
-          .pipe(Effect.flatMap(Effect.fromOption));
-        const organizationId = yield* Effect.fromNullishOr(
-          validSession.session.activeOrganizationId,
-        );
-        const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
-        const id = ORGANIZATION_AGENT.idFromName(organizationId);
-        const stub = ORGANIZATION_AGENT.get(id);
-        const { invoiceId } = yield* Effect.tryPromise(() =>
-          stub.createInvoice(),
-        );
-        return { invoiceId };
-      }),
-    ),
-);
-
 const getInvoiceItems = createServerFn({ method: "GET" })
   .inputValidator(Schema.toStandardSchemaV1(getInvoiceItemsSchema))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
@@ -293,10 +270,9 @@ function RouteComponent() {
     },
   });
 
-  const createInvoiceServerFn = useServerFn(createInvoice);
-  const createInvoiceMutation
-   = useMutation({
-    mutationFn: () => createInvoiceServerFn({ data: undefined }),
+  const { stub } = useOrganizationAgent();
+  const createInvoiceMutation = useMutation({
+    mutationFn: () => stub.createInvoice(),
     onSuccess: (result) => {
       setSelectedInvoiceId(result.invoiceId);
       void queryClient.invalidateQueries({
@@ -304,8 +280,6 @@ function RouteComponent() {
       });
     },
   });
-
-  const { stub } = useOrganizationAgent();
   const softDeleteInvoiceMutation = useMutation({
     mutationFn: ({ invoiceId }: { invoiceId: string }) =>
       stub.softDeleteInvoice(invoiceId),
