@@ -98,6 +98,7 @@ function RouteComponent() {
     mutationFn: async (file: File) => {
       const buffer = await file.arrayBuffer();
       const base64 = btoa(String.fromCodePoint(...new Uint8Array(buffer)));
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
       return stub.uploadInvoice({ fileName: file.name, contentType: file.type, base64 });
     },
     onSuccess: (result) => {
@@ -109,6 +110,7 @@ function RouteComponent() {
     },
   });
   const createInvoiceMutation = useMutation({
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     mutationFn: () => stub.createInvoice(),
     onSuccess: (result) => {
       setSelectedInvoiceId(result.invoiceId);
@@ -122,12 +124,13 @@ function RouteComponent() {
     },
   });
   const softDeleteInvoiceMutation = useMutation({
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     mutationFn: ({ invoiceId }: { invoiceId: string }) =>
       stub.softDeleteInvoice(invoiceId),
   });
 
   const getInvoiceWithItemsFn = useServerFn(getInvoiceWithItems);
-  const invoiceQuery = useQuery<InvoiceWithItems>({
+  const invoiceQuery = useQuery<InvoiceWithItems | null>({
     queryKey: [
       ...invoiceQueryKey(organizationId, selectedInvoice?.id ?? ""),
       getInvoiceWithItemsFn,

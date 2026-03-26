@@ -19,6 +19,7 @@ function RouteComponent() {
   const [message, setMessage] = React.useState("Loading...");
 
   React.useEffect(() => {
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     void stub.getTestMessage().then(setMessage);
   }, [stub]);
 

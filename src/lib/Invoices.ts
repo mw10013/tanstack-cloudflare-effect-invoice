@@ -134,11 +134,9 @@ export const getInvoiceWithItems = createServerFn({ method: "GET" })
 export const updateInvoiceWithAgent = (data: UpdateInvoiceInput & { organizationId: string }) =>
   Effect.gen(function* () {
     const stub = yield* getOrganizationAgentStub(data.organizationId);
-    const updateInvoiceStub = stub as typeof stub & {
-      updateInvoice: (input: UpdateInvoiceInput) => Promise<OrganizationDomain.InvoiceWithItems>;
-    };
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     return yield* Effect.tryPromise(() =>
-      updateInvoiceStub.updateInvoice({
+      stub.updateInvoice({
         invoiceId: data.invoiceId,
         name: data.name,
         invoiceNumber: data.invoiceNumber,

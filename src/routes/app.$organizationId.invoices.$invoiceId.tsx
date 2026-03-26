@@ -141,6 +141,7 @@ function RouteComponent() {
 
   const saveMutation = useMutation({
     mutationFn: (data: InvoiceFormValues) =>
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
       stub.updateInvoice({
         invoiceId,
         name: data.name,

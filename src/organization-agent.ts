@@ -266,10 +266,13 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
         const repo = yield* OrganizationRepository;
-        const invoice = yield* repo.updateInvoice(input);
+        const invoice = yield* repo.updateInvoice(input).pipe(
+          Effect.map(Option.getOrNull),
+        );
+        if (!invoice) return yield* new OrganizationAgentError({ message: "Invoice not found after update" });
         yield* broadcastActivity(this, {
           level: "success",
-          text: `Invoice updated: ${invoice.name || invoice.fileName || invoice.id}`,
+          text: `Invoice updated: ${invoice.name ?? invoice.fileName ?? invoice.id}`,
         });
         return invoice;
       }),
