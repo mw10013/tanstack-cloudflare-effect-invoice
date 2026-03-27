@@ -147,17 +147,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     connection.setState({ userId });
   }
 
-  @callable()
-  getTestMessage() {
-    return this.runEffect(
-      Effect.gen({ self: this }, function* () {
-        const auth = yield* getConnectionIdentity();
-        yield* Effect.logDebug("getTestMessage called");
-        return `${this.state.message} (${auth.userId})`;
-      }),
-    );
-  }
-
   onInvoiceUpload(upload: {
     invoiceId: string;
     r2ActionTime: string;
