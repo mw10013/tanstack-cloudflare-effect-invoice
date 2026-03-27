@@ -49,7 +49,7 @@ Decoding uses Effect Schema: `Schema.decodeUnknownExit(Schema.fromJsonString(Act
 
 ## Do broadcasts trigger query invalidation?
 
-**Yes.** In `src/routes/app.$organizationId.tsx` L120-139:
+**Yes.** In `src/routes/app.$organizationId.tsx` L120-136:
 
 ```ts
 onMessage: (event) => {
@@ -81,7 +81,7 @@ Several mutations invalidate queries in BOTH their `onSuccess` AND via broadcast
 | Action | Mutation onSuccess invalidation | Broadcast invalidation |
 |---|---|---|
 | Upload invoice | `invoicesQueryKey` (invoices.index L107) | `shouldInvalidateForInvoice("Invoice uploaded:")` → yes |
-| Create invoice | `invoicesQueryKey` (invoices.index L117) | `shouldInvalidateForInvoice("Invoice created")` → **no** (no colon suffix) |
+| Create invoice | `invoicesQueryKey` (invoices.index L117) | `shouldInvalidateForInvoice("Invoice created")` → **no** (no match) |
 | Update invoice | `invoicesQueryKey` (invoices.$invoiceId L166) | `shouldInvalidateForInvoice("Invoice updated:")` → yes |
 | Delete invoice | **none** | `shouldInvalidateForInvoice("Invoice deleted")` → yes |
 | Extraction complete | n/a (server-initiated) | yes |
@@ -89,13 +89,11 @@ Several mutations invalidate queries in BOTH their `onSuccess` AND via broadcast
 **Issues:**
 1. Upload and update invoke double-invalidation for the initiating client — once from mutation `onSuccess` and again from broadcast `onMessage`. This is harmless but wasteful.
 2. `softDeleteInvoiceMutation` has no `onSuccess` invalidation — relies entirely on broadcast. If the WebSocket disconnects briefly, the UI won't reflect the delete until manual refresh.
-3. `"Invoice created"` misses broadcast invalidation because it lacks the `:` suffix that `shouldInvalidateForInvoice` checks via `startsWith("Invoice created:")` — wait, actually the check doesn't exist at all in `shouldInvalidateForInvoice`. The text is `"Invoice created"` with no prefix match.
+3. `"Invoice created"` misses broadcast invalidation entirely — it's not in the `shouldInvalidateForInvoice` check list. The mutation `onSuccess` is the only invalidation path for the initiating client, and other connected clients won't see the new invoice until their next query refetch.
 
 ## Activity feed implementation
 
-`ActivityFeed` (`app.$organizationId.tsx` L309-351) uses a TanStack Query with `staleTime: Infinity` and a no-op `queryFn: () => []`. Data is injected purely via `setQueryData` in the `onMessage` handler. This is a client-only, ephemeral feed — no persistence, no server fetch, resets on page refresh.
-
-~~The `onStateUpdate` callback synced DO state to `agentState` query key — removed as dead code (never consumed).~~
+`ActivityFeed` (`app.$organizationId.tsx` L299-341) uses a TanStack Query with `staleTime: Infinity` and a no-op `queryFn: () => []`. Data is injected purely via `setQueryData` in the `onMessage` handler. This is a client-only, ephemeral feed — no persistence, no server fetch, resets on page refresh.
 
 ## Agent connection & auth
 
@@ -103,6 +101,10 @@ Several mutations invalidate queries in BOTH their `onSuccess` AND via broadcast
 2. `routeAgentRequest` in `worker.ts` L240 intercepts this before TanStack Start's server entry
 3. Auth is checked in `onBeforeConnect` / `onBeforeRequest` via `authorizeAgentRequest` (worker.ts L207-222): validates session, checks `activeOrganizationId === agentName`, injects `x-organization-agent-user-id` header
 4. `OrganizationAgent.onConnect` (L138-148) reads that header and sets connection state
+
+## Agent context surface
+
+`OrganizationAgentContext` (`src/lib/OrganizationAgentContext.tsx`) exposes `{ call, stub, ready, identified }` from `useAgent`. Consumer components use `stub` for typed RPC (e.g., `stub.uploadInvoice(...)`, `stub.createInvoice()`). `OrganizationAgentState` and `initialState` remain in `organization-agent.ts` because the `Agent<Env, State>` base class requires a state type parameter, even though agent state is not consumed on the client.
 
 ## Analysis: functional / idiomatic patterns
 
@@ -131,7 +133,7 @@ ActivityEnvelope = {
 Then `shouldInvalidateForInvoice` becomes a set lookup on `action`, and targeted single-invoice invalidation becomes possible.
 
 #### 2. No message-type discrimination beyond "activity"
-The `type` field is always `"activity"`. If we ever need non-activity broadcasts (e.g., agent state commands, presence), the current envelope is too narrow. The `onStateUpdate` callback already handles a separate channel, but custom message types would need the envelope to be extensible — a discriminated union with `Schema.Union`.
+The `type` field is always `"activity"`. If we ever need non-activity broadcasts (e.g., presence, notifications), the current envelope is too narrow. Custom message types would need the envelope to be extensible — a discriminated union with `Schema.Union`.
 
 #### 3. Broadcast is fire-and-forget with no delivery guarantee
 `agent.broadcast()` sends to all currently-connected WebSockets. If a client is disconnected during an extraction workflow (which can take seconds), it misses the completion broadcast and the invoice stays in "extracting" state until manual refresh. 
@@ -162,7 +164,7 @@ private broadcastActivity = Effect.fn("broadcastActivity")(
 ```
 
 #### 6. `OrganizationAgentContext` exposes transport primitives
-`useOrganizationAgent()` returns `{ call, stub, setState, ready, identified }` — these are raw WebSocket/RPC primitives. Consumer components like `invoices.index.tsx` do `stub.uploadInvoice(...)` directly. A domain-oriented hook like `useInvoiceActions()` would encapsulate the RPC calls and could handle error normalization, loading states, and invalidation in one place.
+`useOrganizationAgent()` returns `{ call, stub, ready, identified }` — raw WebSocket/RPC primitives. Consumer components like `invoices.index.tsx` do `stub.uploadInvoice(...)` directly. A domain-oriented hook like `useInvoiceActions()` would encapsulate the RPC calls and could handle error normalization, loading states, and invalidation in one place.
 
 #### 7. Activity data isn't typed beyond display text
 The `ActivityMessage` carries `{ createdAt, level, text }` — purely for display. There's no structured payload for consumers to act on. The `text` field doubles as both display label AND invalidation discriminator. Separating concerns (display text vs. machine-readable action + entity) would be cleaner.
@@ -172,7 +174,7 @@ During a batch upload (multiple files), each file triggers its own broadcast. Th
 
 ## Reference material consulted
 
-- **Agents SDK**: `refs/agents/docs/client-sdk.md` — `useAgent` hook, `onMessage`, `onStateUpdate`, RPC via `stub`
+- **Agents SDK**: `refs/agents/docs/client-sdk.md` — `useAgent` hook, `onMessage`, RPC via `stub`
 - **Agents SDK**: `refs/agents/docs/state.md` — state sync, `broadcast()`, `onStateChanged`
 - **Cloudflare Docs**: `refs/cloudflare-docs/.../durable-objects/best-practices/websockets.mdx` — WebSocket hibernation, `getWebSockets()`, broadcast patterns
 - **Cloudflare Docs**: `refs/cloudflare-docs/.../r2/buckets/event-notifications.mdx` — R2 → Queue flow
@@ -184,7 +186,7 @@ During a batch upload (multiple files), each file triggers its own broadcast. Th
 
 - **`onStateUpdate` + `agentState` query key**: `useAgent`'s `onStateUpdate` callback wrote to `["organization", organizationId, "agentState"]` — never consumed by any component. Removed callback and query key. `OrganizationAgentState` and `initialState` remain in `organization-agent.ts` because the `Agent<Env, State>` base class requires them.
 - **`setState` from context**: `OrganizationAgentContext` exposed `setState` — never called by any consumer. Removed from interface and provider value.
-- **`invoiceItems` query key invalidation**: `onMessage` invalidated `["organization", organizationId, "invoiceItems"]` — this query key is never used by any `useQuery`. Invoice items are fetched via `invoiceQueryKey` (`getInvoiceWithItems`), which is already invalidated separately. Removed.
+- **`invoiceItems` query key invalidation**: `onMessage` invalidated `["organization", organizationId, "invoiceItems"]` — this query key was never used by any `useQuery`. Invoice items are fetched via `invoiceQueryKey` (`getInvoiceWithItems`), which is already invalidated via the `"invoice"` prefix. Removed.
 
 ## Questions for iteration
 
