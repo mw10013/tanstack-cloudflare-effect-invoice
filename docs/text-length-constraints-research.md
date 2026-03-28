@@ -155,10 +155,15 @@ All fields are bare `Schema.String` with no constraints.
 
 ## Proposed Domain Schema Changes
 
-Using `SchemaTransformation.trim()` + `isMaxLength()` per the trimming decision above.
+Two viable approaches. Both keep length rules in one place.
 Code-controlled columns (`id`, `status`, `r2ObjectKey`, `idempotencyKey`) left unconstrained per decision #1.
 
-### Reusable helper
+### Option A: Single schema (trim + length everywhere)
+
+Use `SchemaTransformation.trim()` + `isMaxLength()` on all text fields.
+This is the simplest and ensures all decoded values are normalized.
+
+Reusable helper:
 
 ```ts
 import { SchemaTransformation } from "effect/Schema"
@@ -220,6 +225,47 @@ export const Invoice = Schema.Struct({
   error: Schema.NullOr(trimmed(10_000)),
 })
 ```
+
+### Option B: Split input vs DB schemas (trim on input only)
+
+Trim is decode-only and encode passthrough in Effect v4. That means `decode` applies `trim`, `encode` does not.
+Grounding:
+
+- `Schema.decode(SchemaTransformation.trim())` applies trim on decode: `refs/effect4/packages/effect/SCHEMA.md:2935-2941`
+- `trim` is decode-only (`Getter.trim()` with `Getter.passthrough()` for encode): `refs/effect4/packages/effect/SCHEMA.md:2967-2973`
+
+Minimal split example:
+
+```ts
+const bounded = (max: number) =>
+  Schema.String.check(Schema.isMaxLength(max))
+
+const boundedTrimmed = (max: number) =>
+  Schema.String.pipe(Schema.decode(SchemaTransformation.trim()))
+    .check(Schema.isMaxLength(max))
+
+const makeInvoiceFields = (text: (max: number) => Schema.Schema<string>) =>
+  Schema.Struct({
+    invoiceNumber: text(100),
+    vendorName: text(500),
+    vendorEmail: text(254),
+  })
+
+export const InvoiceFieldsInput = makeInvoiceFields(boundedTrimmed)
+export const InvoiceFieldsDb = makeInvoiceFields(bounded)
+```
+
+### Trade-offs
+
+| Approach | Pros | Cons |
+| --- | --- | --- |
+| Single schema | Simplest usage; one export to wire everywhere | Trim runs on every decode; masks untrimmed DB values; small extra allocations |
+| Split schemas | Trim only at boundaries; DB reads stay exact and cheaper | More exports; need to pick the right schema per call site |
+
+### Recommendation
+
+If you already have clear input boundaries (extraction, UI, API), use **Option B**. The builder keeps constraints in one place, and DB reads avoid trim overhead.
+If you want the fewest moving parts, **Option A** is fine — trim cost is small compared to SQLite IO.
 
 ### SQLite DDL — CHECK constraints
 
@@ -303,18 +349,9 @@ check(length(period) <= 50)
 
 2. **`extractedJson`**: Cap at 100KB.
 
-3. **Trimming strategy**: Transform at input boundaries, not check-only.
+3. **Trimming strategy**: Transform at input boundaries. DB read strategy is open (single vs split), see trade-offs below.
 
    **Background:** `Schema.Trimmed` is a check — it rejects untrimmed strings with an error, does not modify them. `Schema.decode(SchemaTransformation.trim())` is a transform — it always trims, never errors about whitespace.
-
-   **Decision:** Use `SchemaTransformation.trim()` on extraction/input schemas. AI output and form data always have stray whitespace. The schema normalizes at the boundary. Trimming an already-trimmed string is a no-op, so the same schema works for DB reads without downside.
-
-   ```ts
-   // Transform + length check — used for extraction fields and form input
-   const Bounded = Schema.String.pipe(
-     Schema.decode(SchemaTransformation.trim())
-   ).check(Schema.isMaxLength(500))
-   ```
 
 4. **Branded types**: No brands for now.
 
@@ -322,6 +359,7 @@ check(length(period) <= 50)
 
 ## Next Steps
 
+- [ ] Choose Option A (single schema) or Option B (split input vs DB schemas)
 - [ ] Add `trimmed()` helper and constrained fields to `OrganizationDomain.ts`
 - [ ] Add CHECK constraints to SQLite DDL in `organization-agent.ts`
 - [ ] Ensure extraction workflow decodes/validates through the constrained schemas
