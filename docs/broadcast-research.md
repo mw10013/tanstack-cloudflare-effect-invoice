@@ -322,7 +322,7 @@ useMutation({
 Why this works:
 - **For the initiating client**: `onSettled` fires immediately after the mutation resolves — fast path, no WebSocket dependency.
 - **For other clients**: broadcast `onMessage` fires — they don't have a mutation to settle.
-- **Double invalidation is harmless**: TanStack Query deduplicates concurrent fetches for the same key. If `onSettled` and broadcast both invalidate within the same tick, only one fetch fires.
+- **Double invalidation causes two fetches**: `onSettled` fires immediately; the broadcast arrives over WebSocket tens/hundreds of ms later — different ticks. If the first fetch completes before the broadcast arrives, the broadcast triggers a second fetch. TanStack Query only deduplicates concurrent in-flight fetches (reuses the pending promise), not sequential ones. This is wasteful but not harmful — the second fetch returns identical data. Acceptable tradeoff for the resilience of having both paths (mutation doesn't depend on WebSocket, other clients don't depend on being the mutation initiator).
 - **`onSettled` over `onSuccess`**: runs on both success AND error, so error recovery doesn't need separate handling.
 - **No `setQueryData` to get overwritten**: the current `saveMutation.onSuccess` calls `setQueryData` which the broadcast immediately overwrites via refetch. Removing it simplifies the flow with no visible difference to the user (the refetch returns in ~the same time).
 
