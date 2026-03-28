@@ -216,7 +216,7 @@ export const Invoice = Schema.Struct({
   r2ObjectKey: Schema.String,
   status: InvoiceStatus,
   ...InvoiceExtractionFields.fields,
-  extractedJson: Schema.NullOr(trimmed(100_000)),  // cap TBD
+  extractedJson: Schema.NullOr(trimmed(100_000)),
   error: Schema.NullOr(trimmed(10_000)),
 })
 ```
@@ -280,7 +280,7 @@ check(length(period) <= 50)
 | `tax`            | extraction (AI)         | 50             | Same as subtotal.                                            |
 | `total`          | extraction (AI)         | 50             | Same as subtotal.                                            |
 | `amountDue`      | extraction (AI)         | 50             | Same as subtotal.                                            |
-| `extractedJson`  | code (serialized)       | unbounded      | Full extraction payload. Could truncate at app layer.        |
+| `extractedJson`  | code (serialized)       | 100000         | Full extraction payload.                                     |
 | `error`          | code                    | 10000          | Error messages. Generous but bounded.                        |
 | `description`    | extraction (AI)         | 2000           | Line item descriptions can be lengthy.                       |
 | `quantity`       | extraction (AI)         | 50             | Numeric string.                                              |
@@ -296,13 +296,12 @@ check(length(period) <= 50)
 | `status`           | Code-controlled enum.                                    |
 | `idempotencyKey`   | Code-controlled UUID.                                    |
 | `r2ObjectKey`      | Code-constructed.                                        |
-| `extractedJson`    | Unbounded by nature. App-layer truncation if needed.     |
 
 ## Decisions
 
 1. **Code-controlled columns** (`id`, `status`, `r2ObjectKey`, `idempotencyKey`): Skip constraints. No DB CHECK, no Effect Schema checks.
 
-2. **`extractedJson`**: Cap. Need to pick a limit (TBD — what's a reasonable upper bound for an invoice extraction payload?).
+2. **`extractedJson`**: Cap at 100KB.
 
 3. **Trimming strategy**: Transform at input boundaries, not check-only.
 
@@ -323,7 +322,6 @@ check(length(period) <= 50)
 
 ## Next Steps
 
-- [ ] Confirm `extractedJson` cap (currently 100KB — is that enough for complex invoices?)
 - [ ] Add `trimmed()` helper and constrained fields to `OrganizationDomain.ts`
 - [ ] Add CHECK constraints to SQLite DDL in `organization-agent.ts`
 - [ ] Ensure extraction workflow decodes/validates through the constrained schemas
