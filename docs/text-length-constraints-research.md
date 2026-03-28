@@ -168,7 +168,7 @@ Reusable helper:
 ```ts
 import { SchemaTransformation } from "effect/Schema"
 
-const trimmed = (max: number) =>
+const trimMax = (max: number) =>
   Schema.String.pipe(Schema.decode(SchemaTransformation.trim()))
     .check(Schema.isMaxLength(max))
 ```
@@ -178,20 +178,20 @@ const trimmed = (max: number) =>
 ```ts
 export const InvoiceExtractionFields = Schema.Struct({
   invoiceConfidence: Schema.Number,
-  invoiceNumber: trimmed(100),
-  invoiceDate: trimmed(50),
-  dueDate: trimmed(50),
-  currency: trimmed(10),
-  vendorName: trimmed(500),
-  vendorEmail: trimmed(254),
-  vendorAddress: trimmed(2000),
-  billToName: trimmed(500),
-  billToEmail: trimmed(254),
-  billToAddress: trimmed(2000),
-  subtotal: trimmed(50),
-  tax: trimmed(50),
-  total: trimmed(50),
-  amountDue: trimmed(50),
+  invoiceNumber: trimMax(100),
+  invoiceDate: trimMax(50),
+  dueDate: trimMax(50),
+  currency: trimMax(10),
+  vendorName: trimMax(500),
+  vendorEmail: trimMax(254),
+  vendorAddress: trimMax(2000),
+  billToName: trimMax(500),
+  billToEmail: trimMax(254),
+  billToAddress: trimMax(2000),
+  subtotal: trimMax(50),
+  tax: trimMax(50),
+  total: trimMax(50),
+  amountDue: trimMax(50),
 })
 ```
 
@@ -199,11 +199,11 @@ export const InvoiceExtractionFields = Schema.Struct({
 
 ```ts
 export const InvoiceItemFields = Schema.Struct({
-  description: trimmed(2000),
-  quantity: trimmed(50),
-  unitPrice: trimmed(50),
-  amount: trimmed(50),
-  period: trimmed(50),
+  description: trimMax(2000),
+  quantity: trimMax(50),
+  unitPrice: trimMax(50),
+  amount: trimMax(50),
+  period: trimMax(50),
 })
 ```
 
@@ -212,17 +212,17 @@ export const InvoiceItemFields = Schema.Struct({
 ```ts
 export const Invoice = Schema.Struct({
   id: Schema.String,
-  name: trimmed(500),
-  fileName: trimmed(500),
-  contentType: trimmed(100),
+  name: trimMax(500),
+  fileName: trimMax(500),
+  contentType: trimMax(100),
   createdAt: Schema.Number,
   r2ActionTime: Schema.NullOr(Schema.Number),
   idempotencyKey: Schema.NullOr(Schema.String),
   r2ObjectKey: Schema.String,
   status: InvoiceStatus,
   ...InvoiceExtractionFields.fields,
-  extractedJson: Schema.NullOr(trimmed(100_000)),
-  error: Schema.NullOr(trimmed(10_000)),
+  extractedJson: Schema.NullOr(trimMax(100_000)),
+  error: Schema.NullOr(trimMax(10_000)),
 })
 ```
 
@@ -240,7 +240,7 @@ Minimal split example:
 const bounded = (max: number) =>
   Schema.String.check(Schema.isMaxLength(max))
 
-const boundedTrimmed = (max: number) =>
+const trimMax = (max: number) =>
   Schema.String.pipe(Schema.decode(SchemaTransformation.trim()))
     .check(Schema.isMaxLength(max))
 
@@ -251,7 +251,7 @@ const makeInvoiceFields = (text: (max: number) => Schema.Schema<string>) =>
     vendorEmail: text(254),
   })
 
-export const InvoiceFieldsInput = makeInvoiceFields(boundedTrimmed)
+export const InvoiceFieldsInput = makeInvoiceFields(trimMax)
 export const InvoiceFieldsDb = makeInvoiceFields(bounded)
 ```
 
@@ -360,7 +360,7 @@ check(length(period) <= 50)
 ## Next Steps
 
 - [ ] Choose Option A (single schema) or Option B (split input vs DB schemas)
-- [ ] Add `trimmed()` helper and constrained fields to `OrganizationDomain.ts`
+- [ ] Add `trimMax()` helper and constrained fields to `OrganizationDomain.ts`
 - [ ] Add CHECK constraints to SQLite DDL in `organization-agent.ts`
 - [ ] Ensure extraction workflow decodes/validates through the constrained schemas
 - [ ] Verify UI form validation surfaces constraint violations before DB write
