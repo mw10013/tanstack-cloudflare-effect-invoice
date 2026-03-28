@@ -153,6 +153,106 @@ export const InvoiceItemFields = Schema.Struct({
 
 All fields are bare `Schema.String` with no constraints.
 
+## Proposed Domain Schema Changes
+
+Using `SchemaTransformation.trim()` + `isMaxLength()` per the trimming decision above.
+Code-controlled columns (`id`, `status`, `r2ObjectKey`, `idempotencyKey`) left unconstrained per decision #1.
+
+### Reusable helper
+
+```ts
+import { SchemaTransformation } from "effect/Schema"
+
+const trimmed = (max: number) =>
+  Schema.String.pipe(Schema.decode(SchemaTransformation.trim()))
+    .check(Schema.isMaxLength(max))
+```
+
+### InvoiceExtractionFields (OrganizationDomain.ts)
+
+```ts
+export const InvoiceExtractionFields = Schema.Struct({
+  invoiceConfidence: Schema.Number,
+  invoiceNumber: trimmed(100),
+  invoiceDate: trimmed(50),
+  dueDate: trimmed(50),
+  currency: trimmed(10),
+  vendorName: trimmed(500),
+  vendorEmail: trimmed(254),
+  vendorAddress: trimmed(2000),
+  billToName: trimmed(500),
+  billToEmail: trimmed(254),
+  billToAddress: trimmed(2000),
+  subtotal: trimmed(50),
+  tax: trimmed(50),
+  total: trimmed(50),
+  amountDue: trimmed(50),
+})
+```
+
+### InvoiceItemFields (OrganizationDomain.ts)
+
+```ts
+export const InvoiceItemFields = Schema.Struct({
+  description: trimmed(2000),
+  quantity: trimmed(50),
+  unitPrice: trimmed(50),
+  amount: trimmed(50),
+  period: trimmed(50),
+})
+```
+
+### Invoice struct — fields that need constraints
+
+```ts
+export const Invoice = Schema.Struct({
+  id: Schema.String,
+  name: trimmed(500),
+  fileName: trimmed(500),
+  contentType: trimmed(100),
+  createdAt: Schema.Number,
+  r2ActionTime: Schema.NullOr(Schema.Number),
+  idempotencyKey: Schema.NullOr(Schema.String),
+  r2ObjectKey: Schema.String,
+  status: InvoiceStatus,
+  ...InvoiceExtractionFields.fields,
+  extractedJson: Schema.NullOr(trimmed(100_000)),  // cap TBD
+  error: Schema.NullOr(trimmed(10_000)),
+})
+```
+
+### SQLite DDL — CHECK constraints
+
+```sql
+-- Add to Invoice table DDL
+check(length(name) <= 500),
+check(length(fileName) <= 500),
+check(length(contentType) <= 100),
+check(length(invoiceNumber) <= 100),
+check(length(invoiceDate) <= 50),
+check(length(dueDate) <= 50),
+check(length(currency) <= 10),
+check(length(vendorName) <= 500),
+check(length(vendorEmail) <= 254),
+check(length(vendorAddress) <= 2000),
+check(length(billToName) <= 500),
+check(length(billToEmail) <= 254),
+check(length(billToAddress) <= 2000),
+check(length(subtotal) <= 50),
+check(length(tax) <= 50),
+check(length(total) <= 50),
+check(length(amountDue) <= 50),
+check(length(extractedJson) <= 100000),
+check(length(error) <= 10000)
+
+-- Add to InvoiceItem table DDL
+check(length(description) <= 2000),
+check(length(quantity) <= 50),
+check(length(unitPrice) <= 50),
+check(length(amount) <= 50),
+check(length(period) <= 50)
+```
+
 ## Proposed Constraints
 
 ### Rationale per field
@@ -198,38 +298,33 @@ All fields are bare `Schema.String` with no constraints.
 | `r2ObjectKey`      | Code-constructed.                                        |
 | `extractedJson`    | Unbounded by nature. App-layer truncation if needed.     |
 
-## Open Questions
+## Decisions
 
-1. Should we add constraints to code-controlled columns (`id`, `status`, `r2ObjectKey`) for defense-in-depth, or skip them to reduce noise?
+1. **Code-controlled columns** (`id`, `status`, `r2ObjectKey`, `idempotencyKey`): Skip constraints. No DB CHECK, no Effect Schema checks.
 
-Skip
+2. **`extractedJson`**: Cap. Need to pick a limit (TBD — what's a reasonable upper bound for an invoice extraction payload?).
 
-2. `extractedJson` — leave unbounded or cap at something like 100KB? The extraction payload size depends on invoice complexity.
+3. **Trimming strategy**: Transform at input boundaries, not check-only.
 
-Cap
+   **Background:** `Schema.Trimmed` is a check — it rejects untrimmed strings with an error, does not modify them. `Schema.decode(SchemaTransformation.trim())` is a transform — it always trims, never errors about whitespace.
 
-3. Should domain schemas use `Schema.Trimmed` to normalize whitespace from AI extraction before length checking?
+   **Decision:** Use `SchemaTransformation.trim()` on extraction/input schemas. AI output and form data always have stray whitespace. The schema normalizes at the boundary. Trimming an already-trimmed string is a no-op, so the same schema works for DB reads without downside.
 
-Explain Trimmed. Does it actually transform the string by removing whitespace or simply check that string is trimmed otherwise error?
+   ```ts
+   // Transform + length check — used for extraction fields and form input
+   const Bounded = Schema.String.pipe(
+     Schema.decode(SchemaTransformation.trim())
+   ).check(Schema.isMaxLength(500))
+   ```
 
-We certainly do not want untrimmed strings in the database. So at the very least we need to check at the effect schema level. What I'm sure about is whether the effect Schema should go ahead and always transform strings so they trimmed and then the schema would never produce an error about a string being untrimmed because it always trims it.
+4. **Branded types**: No brands for now.
 
-Now that is certainly handy for dealing with form data ie use entered strings. But the Schema will be used in more places eg. validating data from the database. In that case, I don't think we want to necessarily trim strings from the database.
-
-So I don't know whether to have the Schema trim or simply check that the string is trimmed. Trade-offs, recommendation.
-
-4. Naming convention for branded types — do we want brands like `VendorName` or just inline checks on the struct fields?
-
-No branded types for now.
-
-5. Should `invoiceDate`/`dueDate` get format validation (e.g., ISO 8601 pattern) in addition to length, or is that out of scope?
-
-Defer
+5. **Date format validation**: Defer.
 
 ## Next Steps
 
-- [ ] Decide on open questions above
-- [ ] Add length constraints to `InvoiceExtractionFields` and `InvoiceItemFields` in OrganizationDomain.ts
-- [ ] Add CHECK constraints to SQLite DDL in organization-agent.ts
+- [ ] Confirm `extractedJson` cap (currently 100KB — is that enough for complex invoices?)
+- [ ] Add `trimmed()` helper and constrained fields to `OrganizationDomain.ts`
+- [ ] Add CHECK constraints to SQLite DDL in `organization-agent.ts`
 - [ ] Ensure extraction workflow decodes/validates through the constrained schemas
 - [ ] Verify UI form validation surfaces constraint violations before DB write
