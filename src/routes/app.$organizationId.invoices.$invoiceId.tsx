@@ -106,10 +106,12 @@ export const Route = createFileRoute("/app/$organizationId/invoices/$invoiceId")
       context.queryClient.ensureQueryData({
         queryKey: invoicesQueryKey(organizationId),
         queryFn: () => getInvoices({ data: { organizationId } }),
+        revalidateIfStale: true,
       }),
       context.queryClient.ensureQueryData({
         queryKey: invoiceQueryKey(organizationId, invoiceId),
         queryFn: () => getInvoiceWithItems({ data: { organizationId, invoiceId } }),
+        revalidateIfStale: true,
       }),
     ]);
   },
@@ -162,11 +164,15 @@ function RouteComponent() {
         invoiceItems: data.invoiceItems.map(({ clientId: _, ...rest }) => rest),
       }),
     onSuccess: (invoice: OrganizationDomain.InvoiceWithItems) => {
-      queryClient.setQueryData(invoiceQueryKey(organizationId, invoiceId), invoice);
+      setForm(toFormValues(invoice));
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: invoicesQueryKey(organizationId),
       });
-      setForm(toFormValues(invoice));
+      void queryClient.invalidateQueries({
+        queryKey: invoiceQueryKey(organizationId, invoiceId),
+      });
     },
   });
 

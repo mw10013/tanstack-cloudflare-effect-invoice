@@ -12,6 +12,7 @@ export const Route = createFileRoute("/app/$organizationId/invoices")({
     const invoices = await context.queryClient.ensureQueryData({
       queryKey: invoicesQueryKey(organizationId),
       queryFn: () => getInvoices({ data: { organizationId } }),
+      revalidateIfStale: true,
     });
     const firstInvoiceId = invoices[0]?.id;
     if (firstInvoiceId) {
@@ -21,6 +22,7 @@ export const Route = createFileRoute("/app/$organizationId/invoices")({
           getInvoiceWithItems({
             data: { organizationId, invoiceId: firstInvoiceId },
           }),
+        revalidateIfStale: true,
       });
     }
   },

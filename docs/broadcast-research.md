@@ -129,6 +129,65 @@ Route loader              │                                         │
 
 `router.invalidate()` is a different mechanism — it re-runs route loaders, not query invalidation. Used by non-invoice mutations (members, invitations, billing).
 
+### `ensureQueryData` and invalidated queries — the `revalidateIfStale` gap
+
+`ensureQueryData` (`queryClient.ts:140-164`) has a specific behavior that interacts poorly with query invalidation:
+
+```ts
+ensureQueryData(options) {
+  const query = this.#queryCache.build(this, defaultedOptions)
+  const cachedData = query.state.data
+
+  if (cachedData === undefined) return this.fetchQuery(options)       // no cache → fetch
+
+  if (options.revalidateIfStale &&                                    // stale + opted in → background refetch
+      query.isStaleByTime(resolveStaleTime(defaultedOptions.staleTime, query))) {
+    void this.prefetchQuery(defaultedOptions)
+  }
+
+  return Promise.resolve(cachedData)                                  // ALWAYS returns cached data
+}
+```
+
+**Key**: `ensureQueryData` returns cached data immediately regardless of staleness or invalidation. It only checks `isStaleByTime` (which returns `true` for invalidated queries — see `query.ts:323`) to decide whether to trigger a **background** prefetch. And it only does that background prefetch if `revalidateIfStale: true`.
+
+**Our loaders don't pass `revalidateIfStale`.** This means:
+
+```
+broadcast arrives → invalidateQueries(invoicesQueryKey)
+                    → query.state.isInvalidated = true
+                    → active observer refetches (works fine while on the page)
+
+user navigates to /invoices/$newInvoiceId →
+  loader runs ensureQueryData(invoicesQueryKey)
+    → cachedData exists (stale/invalidated but !== undefined)
+    → revalidateIfStale not set → returns stale data, NO background refetch
+    → component mounts → useQuery observer sees isInvalidated → triggers refetch
+```
+
+The loader returns stale data and the component's observer catches it. This **works** but:
+1. The loader's "ensure" is a no-op for invalidated data — the component does the real work
+2. There's a render cycle with stale data before the refetch completes
+3. The loader was supposed to ensure fresh data before render — it's not doing that for invalidated queries
+
+**`revalidateIfStale: true` should be set on all `ensureQueryData` calls in loaders.** Without it, `ensureQueryData` silently returns invalidated data and doesn't trigger a background refetch. The `useQuery` observer eventually catches it, but the loader is failing at its job of ensuring data freshness before render.
+
+With `revalidateIfStale: true`:
+```
+user navigates to /invoices/$newInvoiceId →
+  loader runs ensureQueryData(invoicesQueryKey, { revalidateIfStale: true })
+    → cachedData exists, isInvalidated = true → isStaleByTime returns true
+    → returns stale data immediately (loader doesn't block)
+    → fires void prefetchQuery() in background
+    → component mounts with stale data, background fetch completes, component re-renders with fresh data
+```
+
+Still not blocking — `ensureQueryData` always returns cached data immediately — but now the background refetch fires from the loader, not waiting for the observer to mount. The difference is small in practice (milliseconds) but the semantics are correct: the loader is responsible for data freshness.
+
+**Done** — `revalidateIfStale: true` added to all 4 `ensureQueryData` calls:
+- `app.$organizationId.invoices.tsx` (2 calls)
+- `app.$organizationId.invoices.$invoiceId.tsx` (2 calls)
+
 ### Current invalidation topology
 
 ```
@@ -239,21 +298,39 @@ The `["org", id, "invoice"]` prefix invalidation matches ALL `invoiceQueryKey(id
 - Use `useAgent`'s `onOpen` to trigger `queryClient.invalidateQueries()` for stale-prone keys on reconnect
 - Persist recent activity server-side (in DO SQLite) and hydrate on connect
 
-#### 2. Dual invalidation is uncoordinated
-The initiating client gets two invalidations for upload/create/update: one from mutation `onSuccess`, one from broadcast `onMessage`. TanStack Query deduplicates concurrent fetches for the same key, so the actual network cost is usually 1 fetch. But the two invalidation sources serve different purposes and have different scope:
+#### 2. Dual invalidation is uncoordinated — use `onSettled` invalidation
 
-- **Mutation `onSuccess`**: only invalidates `invoicesQueryKey` (the list)
-- **Broadcast `onMessage`**: invalidates both `invoicesQueryKey` AND `invoiceQueryKey` prefix (list + all cached details)
+The initiating client gets two invalidations for upload/create/update: one from mutation `onSuccess`, one from broadcast `onMessage`. The mutation path is also incomplete — it only invalidates `invoicesQueryKey` (the list), not the invoice detail cache. The broadcast path does the right thing (both list + detail prefix).
 
-The mutation path is actually incomplete — it doesn't invalidate the invoice detail cache. The broadcast path does the right thing.
+**Approach: `onSettled` invalidation, no `setQueryData`.**
 
-**Three approaches:**
+Mutations use `onSettled` to invalidate the same query keys that broadcast invalidates. No `setQueryData` — let invalidation + refetch be the single data flow. `onSuccess` is reserved for side effects only (navigation, toast, form reset).
 
-**(a) Mutations stop invalidating, broadcast is sole source of truth.** Mutation `onSuccess` handles only navigation/selection. All cache freshness comes from broadcast. Simpler mental model but adds WebSocket dependency for the initiating client's own actions.
+```ts
+useMutation({
+  mutationFn: (data) => stub.updateInvoice(data),
+  onSettled: () => {
+    queryClient.invalidateQueries({ queryKey: invoicesQueryKey(organizationId) })
+    queryClient.invalidateQueries({ queryKey: invoiceQueryKey(organizationId, invoiceId) })
+  },
+  onSuccess: () => {
+    // side effects only: navigate, reset form, etc.
+  },
+})
+```
 
-**(b) Mutations do full invalidation, broadcast handles other clients.** Mutation `onSuccess` invalidates both `invoicesQueryKey` and `invoiceQueryKey` prefix — matching what broadcast does. The initiating client gets immediate invalidation; other clients get it via broadcast. Double-invalidation for the initiator is harmless (TanStack Query dedupes). This is the most resilient approach — works even if WebSocket is down.
+Why this works:
+- **For the initiating client**: `onSettled` fires immediately after the mutation resolves — fast path, no WebSocket dependency.
+- **For other clients**: broadcast `onMessage` fires — they don't have a mutation to settle.
+- **Double invalidation is harmless**: TanStack Query deduplicates concurrent fetches for the same key. If `onSettled` and broadcast both invalidate within the same tick, only one fetch fires.
+- **`onSettled` over `onSuccess`**: runs on both success AND error, so error recovery doesn't need separate handling.
+- **No `setQueryData` to get overwritten**: the current `saveMutation.onSuccess` calls `setQueryData` which the broadcast immediately overwrites via refetch. Removing it simplifies the flow with no visible difference to the user (the refetch returns in ~the same time).
 
-**(c) Current state.** Mutation invalidation is partial (list only, no detail), broadcast fills the gap. Accidentally works but the intent is unclear.
+**Done** — all 4 mutations updated:
+- `uploadMutation` (`invoices.index.tsx`) — moved `invalidateQueries` from `onSuccess` to `onSettled`
+- `createInvoiceMutation` (`invoices.index.tsx`) — moved `invalidateQueries` from `onSuccess` to `onSettled`
+- `saveMutation` (`invoices.$invoiceId.tsx`) — moved to `onSettled`, dropped `setQueryData`, added `invoiceQueryKey` invalidation
+- `softDeleteInvoiceMutation` (`invoices.index.tsx`) — added `onSettled` with `invoicesQueryKey` (previously had no invalidation)
 
 #### 3. `broadcastActivity` takes `this` (agent instance) as an argument
 Every call site does `yield* broadcastActivity(this, { ... })`. Could be a method on `OrganizationAgent` for cleaner `this` binding.
@@ -268,7 +345,10 @@ During batch upload, each file triggers its own broadcast and invalidation. TanS
 Adding `entityId?: string` to `ActivityMessage` would enable targeted single-invoice invalidation (`["organization", orgId, "invoice", entityId]`) instead of the current broad prefix match on `["organization", orgId, "invoice"]`. Not needed at current scale — broad invalidation is fine. Revisit if invoice count grows or if single-invoice cache precision becomes valuable.
 
 #### 7. Update mutation's `setQueryData` is overwritten by broadcast
-`saveMutation.onSuccess` calls `setQueryData(invoiceQueryKey(...), invoice)` to optimistically update the detail cache, then `invalidateQueries(invoicesQueryKey)` for the list. Moments later, the broadcast arrives and calls `invalidateQueries(["org", id, "invoice"])` which triggers a refetch of the detail — overwriting the `setQueryData`. The optimistic update is pointless in practice because the broadcast-triggered refetch replaces it almost immediately.
+`saveMutation.onSuccess` calls `setQueryData(invoiceQueryKey(...), invoice)` to optimistically update the detail cache, then `invalidateQueries(invoicesQueryKey)` for the list. Moments later, the broadcast arrives and calls `invalidateQueries(["org", id, "invoice"])` which triggers a refetch of the detail — overwriting the `setQueryData`. The optimistic update is pointless in practice because the broadcast-triggered refetch replaces it almost immediately. Addressed by the `onSettled` approach above — drop `setQueryData`, use invalidation only.
+
+#### 8. `ensureQueryData` in loaders ignores invalidated queries without `revalidateIfStale`
+See detailed analysis in "the `revalidateIfStale` gap" section above. All loader `ensureQueryData` calls should set `revalidateIfStale: true`.
 
 ## `router.invalidate()` vs `queryClient.invalidateQueries()`
 
@@ -284,9 +364,7 @@ Non-invoice routes (members, invitations, billing) don't use TanStack Query dire
 ## Open questions
 
 1. Do we want server-side activity persistence (DO SQLite) so clients can hydrate history on reconnect?
-2. Should mutations stop doing their own invalidation and defer entirely to broadcast? Or should mutations do full invalidation (approach b) for resilience? Or keep current partial state?
-3. Do we need to handle WebSocket reconnect more explicitly (invalidate stale queries on `onOpen`)?
-4. Is the `setQueryData` in `saveMutation.onSuccess` worth keeping given broadcast overwrites it? It provides a brief flash of updated data before the refetch completes — is that valuable enough?
+2. Do we need to handle WebSocket reconnect more explicitly (invalidate stale queries on `onOpen`)?
 
 ## Reference material consulted
 
@@ -300,3 +378,7 @@ Non-invoice routes (members, invitations, billing) don't use TanStack Query dire
 - **TanStack Query**: `refs/tan-query/packages/query-core/src/query.ts:272-276` — `isActive()` = has observers with enabled !== false
 - **TanStack Query**: `refs/tan-query/docs/framework/react/guides/important-defaults.md` — `gcTime: 5min`, `staleTime: 0`, `refetchOnWindowFocus: true`
 - **TanStack Query**: `refs/tan-query/docs/framework/react/guides/caching.md` — query lifecycle, active/inactive/gc states
+- **TanStack Query**: `refs/tan-query/packages/query-core/src/queryClient.ts:140-164` — `ensureQueryData` implementation, `revalidateIfStale` behavior
+- **TanStack Query**: `refs/tan-query/packages/query-core/src/query.ts:313-328` — `isStaleByTime()`, invalidated queries always return stale
+- **TanStack Query**: `refs/tan-query/docs/framework/react/guides/invalidations-from-mutations.md` — idiomatic `onSettled` invalidation pattern
+- **TanStack Query**: `refs/tan-query/docs/framework/react/guides/optimistic-updates.md` — optimistic update patterns, `cancelQueries` before `setQueryData`

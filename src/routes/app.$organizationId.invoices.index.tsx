@@ -104,6 +104,8 @@ function RouteComponent() {
     onSuccess: (result) => {
       if (fileInputRef.current) fileInputRef.current.value = "";
       setSelectedInvoiceId(result.invoiceId);
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: invoicesQueryKey(organizationId),
       });
@@ -114,12 +116,14 @@ function RouteComponent() {
     mutationFn: () => stub.createInvoice(),
     onSuccess: (result) => {
       setSelectedInvoiceId(result.invoiceId);
-      void queryClient.invalidateQueries({
-        queryKey: invoicesQueryKey(organizationId),
-      });
       void navigate({
         to: "/app/$organizationId/invoices/$invoiceId",
         params: { organizationId, invoiceId: result.invoiceId },
+      });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: invoicesQueryKey(organizationId),
       });
     },
   });
@@ -127,6 +131,11 @@ function RouteComponent() {
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     mutationFn: ({ invoiceId }: { invoiceId: string }) =>
       stub.softDeleteInvoice(invoiceId),
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: invoicesQueryKey(organizationId),
+      });
+    },
   });
 
   const getInvoiceWithItemsFn = useServerFn(getInvoiceWithItems);
