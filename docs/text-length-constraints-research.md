@@ -353,17 +353,21 @@ check(length(period) <= 50)
 
 3. **`extractedJson`**: Cap at 100KB.
 
-4. **Trimming strategy**: Form layer trims; schemas validate only. See details below.
+4. **Normalization strategy**: Normalize in the form component layer before blur validation; schemas validate only. See details below.
 
-   **Background:** `Schema.Trimmed` (`isTrimmed()`) is a check — it rejects untrimmed strings with an error, does not modify them. `Schema.decode(SchemaTransformation.trim())` is a transform — it always trims, never errors about whitespace. We use validation-only schemas (`isTrimmed()` + `isMaxLength()`), so trimming must happen before the schema sees the data.
+### Field normalization in TanStack Form
 
-   TanStack Form does not apply transformed schema output to form state:
-   - "Validation will not provide you with transformed values." `refs/tan-form/docs/framework/react/guides/validation.md:461`
-   - "The value passed to the onSubmit function will always be the input data... parse it in the onSubmit function." `refs/tan-form/docs/framework/react/guides/submission-handling.md:67-90`
+Normalization is the general pattern of transforming a field value before validation: trimming whitespace, formatting dates (`"march 5"` → `"2026-03-05"`), formatting currency, phone numbers, etc. The shape is always the same:
 
-### Trimming strategy: centralized trim-before-blur in TextField component (recommended)
+1. User types freely
+2. On blur, normalize the value (trim, format, parse)
+3. Then validate the normalized value
 
-Trim in the input's `onBlur` handler **before** calling `field.handleBlur()`, so blur validators always see the trimmed value. Centralize this in a pre-bound `TextField` component via `createFormHook`.
+TanStack Form has no first-class normalization API. Validators are pure checks, listeners are side effects, and they run in a fixed order we can't control. But the building blocks exist.
+
+### Normalize-before-blur in a field component (recommended)
+
+Normalize in the input's `onBlur` handler **before** calling `field.handleBlur()`, so blur validators always see the normalized value. Centralize in a pre-bound component via `createFormHook`.
 
 #### Why not a form-level onBlur listener?
 
@@ -379,15 +383,15 @@ handleBlur = () => {
 }
 ```
 
-A form-level listener that trims would run at step 2 — after blur validators already saw the untrimmed value. If `isTrimmed()` is on the blur validator, it rejects, then the listener trims, then `setValue` re-validates via onChange. The user sees a flash of a spurious trim error.
+A form-level listener that normalizes would run at step 2 — after blur validators already saw the raw value. If the blur validator checks `isTrimmed()` or date format, it rejects the raw input, then the listener normalizes, then `setValue` re-validates via onChange. The user sees a flash of a spurious error.
 
 #### Why not onChange validation?
 
-`isTrimmed()` on `validators.onChange` fires on every keystroke. A space is valid mid-string (e.g. `"John Smith"`), but `isTrimmed()` rejects leading/trailing whitespace — so typing a trailing space before the next word would show a false error. onChange is wrong for trim checking.
+`isTrimmed()` on `validators.onChange` fires on every keystroke. A space is valid mid-string (e.g. `"John Smith"`), but `isTrimmed()` rejects leading/trailing whitespace — so typing a trailing space before the next word shows a false error. onChange is wrong for normalization checks.
 
-#### Correct approach: trim in input onBlur, validate on blur
+#### Correct approach: normalize in input onBlur, validate on blur
 
-Use `field.setValue(trimmed, { dontValidate: true })` to set the trimmed value without triggering change validation, then call `field.handleBlur()` which runs blur validation on the now-trimmed value.
+Use `field.setValue(normalized, { dontValidate: true })` to set the normalized value without triggering change validation, then call `field.handleBlur()` which runs blur validation on the now-normalized value.
 
 **`setValue`** (`refs/tan-form/packages/form-core/src/FieldApi.ts:1390-1404`):
 
@@ -414,22 +418,28 @@ Flow:
 ```mermaid
 flowchart TD
   A1["User blurs field"] --> A2["input onBlur handler"]
-  A2 --> A3{"value needs trimming?"}
-  A3 -->|yes| A4["field.setValue(trimmed, { dontValidate: true })"]
-  A4 --> A5["field.handleBlur()"]
-  A3 -->|no| A5
-  A5 --> A6["validate('blur') sees TRIMMED value"]
-  A6 --> A7["isTrimmed() passes, isMaxLength() checked"]
+  A2 --> A3["normalize(value)"]
+  A3 --> A4{"value changed?"}
+  A4 -->|yes| A5["field.setValue(normalized, { dontValidate: true })"]
+  A5 --> A6["field.handleBlur()"]
+  A4 -->|no| A6
+  A6 --> A7["validate('blur') sees NORMALIZED value"]
 ```
 
 No spurious errors. No flash. Blur validator sees clean data.
 
-#### Centralized via TextField component
+#### Normalizing field component
 
-Use `createFormHook` to register a pre-bound `TextField` that handles trim-on-blur for all string fields:
+Centralize in a pre-bound component via `createFormHook`. The `normalize` prop accepts any `string → string` function — trim, date formatting, currency formatting, etc.
 
 ```tsx
-function TextField({ label }: { label: string }) {
+function TextField({
+  label,
+  normalize = (v: string) => v.trim(),
+}: {
+  label: string
+  normalize?: (value: string) => string
+}) {
   const field = useFieldContext<string>()
   return (
     <label>
@@ -438,9 +448,9 @@ function TextField({ label }: { label: string }) {
         value={field.state.value}
         onChange={(e) => field.handleChange(e.target.value)}
         onBlur={(e) => {
-          const trimmed = e.target.value.trim()
-          if (trimmed !== field.state.value) {
-            field.setValue(trimmed, { dontValidate: true })
+          const normalized = normalize(e.target.value)
+          if (normalized !== field.state.value) {
+            field.setValue(normalized, { dontValidate: true })
           }
           field.handleBlur()
         }}
@@ -457,29 +467,58 @@ const { useAppForm } = createFormHook({
 })
 ```
 
-Usage — validation via `validators.onBlur` with the Effect Schema:
+Default normalizer is `trim()` since it applies to nearly all text fields. Fields that need additional normalization override it.
+
+Usage examples:
 
 ```tsx
-const form = useAppForm({
-  defaultValues: { vendorName: '', vendorEmail: '' },
-})
-
-// ...
+// Trimming (default — no normalize prop needed)
 <form.AppField
   name="vendorName"
   validators={{ onBlur: vendorNameSchema }}
   children={(field) => <field.TextField label="Vendor Name" />}
+/>
+
+// Date normalization — parse loose input into canonical format
+<form.AppField
+  name="invoiceDate"
+  validators={{ onBlur: invoiceDateSchema }}
+  children={(field) => (
+    <field.TextField label="Invoice Date" normalize={parseLooseDate} />
+  )}
+/>
+
+// Composed normalizers — trim then format
+<form.AppField
+  name="currency"
+  validators={{ onBlur: currencySchema }}
+  children={(field) => (
+    <field.TextField
+      label="Currency"
+      normalize={(v) => v.trim().toUpperCase()}
+    />
+  )}
 />
 ```
 
 Docs:
 - Custom form hooks: `refs/tan-form/docs/framework/react/guides/form-composition.md:10-44`
 - Pre-bound field components: `refs/tan-form/docs/framework/react/guides/form-composition.md:46-104`
-- Form-level listeners propagate to children: `refs/tan-form/docs/framework/react/guides/listeners.md:93-95`
 
-#### Alternative: form-level onBlur listener (deferred trimming)
+   **Background on Effect Schema checks vs transforms:**
 
-If centralizing in `TextField` is not feasible, a form-level listener works but with a caveat: blur validators see pre-trim values. Only viable if `isTrimmed()` is dropped from the schema and replaced with `isMaxLength()` only.
+   `Schema.Trimmed` (`isTrimmed()`) is a check — it rejects untrimmed strings with an error, does not modify them. `Schema.decode(SchemaTransformation.trim())` is a transform — it always trims, never errors about whitespace. We use validation-only schemas (`isTrimmed()` + `isMaxLength()`), so normalization must happen before the schema sees the data.
+
+   TanStack Form does not apply transformed schema output to form state:
+   - "Validation will not provide you with transformed values." `refs/tan-form/docs/framework/react/guides/validation.md:461`
+   - "The value passed to the onSubmit function will always be the input data... parse it in the onSubmit function." `refs/tan-form/docs/framework/react/guides/submission-handling.md:67-90`
+
+#### Alternative: form-level onBlur listener (deferred normalization)
+
+A form-level listener works for generic normalization (trim all strings) but with caveats:
+- Blur validators see pre-normalized values (listener runs after `validate('blur')`)
+- Only viable if the schema drops checks that fail on unnormalized input (e.g. drop `isTrimmed()`, keep only `isMaxLength()`)
+- Can't express field-specific normalization (date parsing) without knowing which field triggered the event
 
 ```tsx
 const form = useForm({
@@ -495,7 +534,36 @@ const form = useForm({
 })
 ```
 
-Trade-off: no schema-level guarantee that values are trimmed. Relies on all input paths using the listener. DB admits untrimmed strings since CHECK only enforces length.
+Trade-off: no schema-level guarantee that values are trimmed. DB admits untrimmed strings since CHECK only enforces length.
+
+### TanStack Form GitHub issues: normalization is a known gap
+
+TanStack Form has no built-in normalization API. This is a known gap with active discussion:
+
+**[#418](https://github.com/TanStack/form/issues/418) — Transform values on submit** (OPEN)
+
+The canonical issue. Filed by the maintainer (`crutchcorn`). 18+ comments, unassigned, no PR.
+- Original request: field-level `transformOnSubmit` prop (e.g. `transformOnSubmit={v => parseFloat(v)}`)
+- `gutentag2012` suggests per-field `transformToBinding` / `transformFromBinding` on every change
+- `juanvilladev` argues standard schema `z.input` / `z.output` should be respected — `defaultValues` typed as input, `onSubmit` typed as output
+- `bpinto`: "Wouldn't we need to perform the transformations on `onChange` (and others) events as well?"
+- Community workaround: call `schema.parse(value)` again inside `onSubmit`
+
+**[#1723](https://github.com/TanStack/form/issues/1723) — Parsed value not returned from standard schema** (OPEN)
+
+When using Zod/Valibot/Effect with transforms, `onSubmit` receives the raw value, not the parsed/transformed output. Trimming, coercion, and normalization in the schema are silently skipped.
+- Official docs acknowledge: "While TanStack Form provides Standard Schema support for validation, it does not preserve the Schema's output data."
+- Proposed fix: return `{ ok: true, data: result.value }` from the standard schema validator
+
+**[#163](https://github.com/TanStack/form/issues/163) — `preSubmit` for v2?** (CLOSED)
+
+Normalization before submit was requested in the earliest TanStack Form versions. `preSubmit` was added in v2.9.0 (old react-form), but no equivalent exists in the current library.
+
+**[#187](https://github.com/TanStack/form/issues/187) — Input masking** (CLOSED, stale)
+
+Phone number formatting, date masking. No resolution — suggested using `prevalidate`. No built-in masking support added.
+
+**Implication for our approach:** The normalize-before-blur pattern via a pre-bound component is the idiomatic workaround given the current API. If #418 or #1723 ship, the approach could simplify — transforms in the schema would be respected, and normalization could live in the validation layer instead of the component layer.
 
 ### SSR forms with TanStack Start
 
@@ -571,7 +639,7 @@ function Home() {
 
   return (
     <form action={handleForm.url} method="post" encType="multipart/form-data">
-      {/* Uses pre-bound TextField with trim-on-blur built in */}
+      {/* Uses pre-bound TextField with normalize-on-blur (default: trim) */}
     </form>
   )
 }
@@ -583,7 +651,7 @@ function Home() {
 | --- | --- | --- |
 | Validation | Client-side only (until server fn call) | Client + server validation, errors merge back |
 | Progressive enhancement | Requires JS | Works without JS via native form post |
-| Trimming | TextField trims on blur before validation | TextField trims on blur + server normalizes on submit |
+| Normalization | TextField normalizes on blur before validation | TextField normalizes on blur + server normalizes on submit |
 | Complexity | Lower — no server validate setup | Higher — `formOptions`, `createServerValidate`, `useTransform`/`mergeForm` |
 | Security | Depends on server fn validation | Server validation is explicit and integrated |
 
@@ -609,7 +677,7 @@ Parsing in `onSubmit` produces a transformed output value but does not mutate fo
 
 - [ ] Add `trimmedMax()` helper and constrained fields to `OrganizationDomain.ts`
 - [ ] Add CHECK constraints to SQLite DDL in `organization-agent.ts`
-- [ ] Create `createFormHook` with pre-bound `TextField` that trims on blur via `setValue({ dontValidate: true })` + `handleBlur()`
+- [ ] Create `createFormHook` with pre-bound `TextField` that normalizes on blur via `setValue(normalized, { dontValidate: true })` + `handleBlur()` (default: trim)
 - [ ] Wire `validators.onBlur` using the constrained schemas on form fields
 - [ ] Ensure extraction workflow decodes/validates through the constrained schemas
 - [ ] Decide on SSR form adoption (see trade-offs above)
