@@ -10,7 +10,19 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { trimFields } from "./SchemaEx";
 import { Invoice, InvoiceItem } from "./OrganizationDomain";
 
-const InvoiceExtractionSchema = Schema.Struct({
+export const InvoiceItemExtractionSchema = Schema.Struct(
+  trimFields(
+    Struct.pick(InvoiceItem.fields, [
+      "description",
+      "quantity",
+      "unitPrice",
+      "amount",
+      "period",
+    ]),
+  ),
+);
+
+export const InvoiceExtractionSchema = Schema.Struct({
   ...trimFields(
     Struct.pick(Invoice.fields, [
       "invoiceConfidence",
@@ -30,17 +42,7 @@ const InvoiceExtractionSchema = Schema.Struct({
       "amountDue",
     ]),
   ),
-  invoiceItems: Schema.Array(Schema.Struct({
-    ...trimFields(
-      Struct.pick(InvoiceItem.fields, [
-        "description",
-        "quantity",
-        "unitPrice",
-        "amount",
-        "period",
-      ]),
-    ),
-  })),
+  invoiceItems: Schema.Array(InvoiceItemExtractionSchema),
 });
 
 const invoiceExtractionJsonSchema =

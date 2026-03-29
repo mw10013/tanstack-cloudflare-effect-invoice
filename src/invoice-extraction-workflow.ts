@@ -138,17 +138,15 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
               cause,
             }),
         });
-        const { invoiceItems, ...extracted } = extractionResult;
         yield* Effect.tryPromise({
           try: () =>
             step.do("save-extraction", () =>
               runEffect(
                 Effect.tryPromise(() =>
-                  agent.saveExtraction({
+                  agent.saveInvoiceExtraction({
                     invoiceId: event.payload.invoiceId,
                     idempotencyKey: event.payload.idempotencyKey,
-                    extracted,
-                    invoiceItems,
+                    extractedInvoice: extractionResult,
                     extractedJson: JSON.stringify(extractionResult),
                   }),
                 ),

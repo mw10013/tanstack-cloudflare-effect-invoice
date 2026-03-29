@@ -1,6 +1,7 @@
 import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import type { InvoiceExtractionSchema } from "./InvoiceExtraction";
 import * as OrganizationDomain from "./OrganizationDomain";
 import { JsonDataFieldHead } from "./SchemaEx";
 
@@ -153,34 +154,34 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
-      const saveExtraction = Effect.fn(
-        "OrganizationRepository.saveExtraction",
+      const saveInvoiceExtraction = Effect.fn(
+        "OrganizationRepository.saveInvoiceExtraction",
       )(
         function* (input: {
           invoiceId: string;
           idempotencyKey: string;
-          extracted: typeof OrganizationDomain.InvoiceExtractionFields.Type;
-          invoiceItems: readonly (typeof OrganizationDomain.InvoiceItemExtractionFields.Type)[];
+          extractedInvoice: typeof InvoiceExtractionSchema.Type;
           extractedJson: string;
         }) {
+          const { invoiceItems, ...extracted } = input.extractedInvoice;
           const updated = yield* sql`
             update Invoice
             set status = 'ready',
-                invoiceConfidence = ${input.extracted.invoiceConfidence},
-                invoiceNumber = ${input.extracted.invoiceNumber},
-                invoiceDate = ${input.extracted.invoiceDate},
-                dueDate = ${input.extracted.dueDate},
-                currency = ${input.extracted.currency},
-                vendorName = ${input.extracted.vendorName},
-                vendorEmail = ${input.extracted.vendorEmail},
-                vendorAddress = ${input.extracted.vendorAddress},
-                billToName = ${input.extracted.billToName},
-                billToEmail = ${input.extracted.billToEmail},
-                billToAddress = ${input.extracted.billToAddress},
-                subtotal = ${input.extracted.subtotal},
-                tax = ${input.extracted.tax},
-                total = ${input.extracted.total},
-                amountDue = ${input.extracted.amountDue},
+                invoiceConfidence = ${extracted.invoiceConfidence},
+                invoiceNumber = ${extracted.invoiceNumber},
+                invoiceDate = ${extracted.invoiceDate},
+                dueDate = ${extracted.dueDate},
+                currency = ${extracted.currency},
+                vendorName = ${extracted.vendorName},
+                vendorEmail = ${extracted.vendorEmail},
+                vendorAddress = ${extracted.vendorAddress},
+                billToName = ${extracted.billToName},
+                billToEmail = ${extracted.billToEmail},
+                billToAddress = ${extracted.billToAddress},
+                subtotal = ${extracted.subtotal},
+                tax = ${extracted.tax},
+                total = ${extracted.total},
+                amountDue = ${extracted.amountDue},
                 extractedJson = ${input.extractedJson},
                 error = ${null}
             where id = ${input.invoiceId} and idempotencyKey = ${input.idempotencyKey}
@@ -188,8 +189,8 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
           `;
           if (updated.length === 0) return updated;
           yield* sql`delete from InvoiceItem where invoiceId = ${input.invoiceId}`;
-          for (let i = 0; i < input.invoiceItems.length; i++) {
-            const item = input.invoiceItems[i];
+          for (let i = 0; i < invoiceItems.length; i++) {
+            const item = invoiceItems[i];
             const id = crypto.randomUUID();
             const order = i + 1;
             yield* sql`
@@ -289,7 +290,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         createInvoice,
         updateInvoice,
         softDeleteInvoice,
-        saveExtraction,
+        saveInvoiceExtraction,
         setError,
       };
     }),

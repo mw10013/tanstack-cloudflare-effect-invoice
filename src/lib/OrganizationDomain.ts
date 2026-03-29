@@ -1,6 +1,4 @@
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
-import { trimFields } from "./SchemaEx";
 
 export const InvoiceStatusValues = [
   "extracting",
@@ -60,40 +58,6 @@ export const InvoiceItem = Schema.Struct({
   ...InvoiceItemUpdateFields.fields,
 });
 export type InvoiceItem = typeof InvoiceItem.Type;
-
-export const InvoiceExtractionFields = Schema.Struct(
-  trimFields(
-    Struct.pick(Invoice.fields, [
-      "invoiceConfidence",
-      "invoiceNumber",
-      "invoiceDate",
-      "dueDate",
-      "currency",
-      "vendorName",
-      "vendorEmail",
-      "vendorAddress",
-      "billToName",
-      "billToEmail",
-      "billToAddress",
-      "subtotal",
-      "tax",
-      "total",
-      "amountDue",
-    ]),
-  ),
-);
-
-export const InvoiceItemExtractionFields = Schema.Struct(
-  trimFields(
-    Struct.pick(InvoiceItem.fields, [
-      "description",
-      "quantity",
-      "unitPrice",
-      "amount",
-      "period",
-    ]),
-  ),
-);
 
 export const InvoiceWithItems = Schema.Struct({
   ...Invoice.fields,

@@ -8,7 +8,8 @@ import type { ActivityMessage } from "@/lib/Activity";
 import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { makeLoggerLayer } from "@/lib/LoggerLayer";
-import type { InvoiceExtractionFields, InvoiceItemExtractionFields, InvoiceItemUpdateFields } from "@/lib/OrganizationDomain";
+import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
+import type { InvoiceItemUpdateFields } from "@/lib/OrganizationDomain";
 import {
   OrganizationAgentError,
   activeWorkflowStatuses,
@@ -328,17 +329,16 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  saveExtraction(input: {
+  saveInvoiceExtraction(input: {
     invoiceId: string;
     idempotencyKey: string;
-    extracted: typeof InvoiceExtractionFields.Type;
-    invoiceItems: readonly (typeof InvoiceItemExtractionFields.Type)[];
+    extractedInvoice: typeof InvoiceExtractionSchema.Type;
     extractedJson: string;
   }) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
         const repo = yield* OrganizationRepository;
-        const updated = yield* repo.saveExtraction(input);
+        const updated = yield* repo.saveInvoiceExtraction(input);
         if (updated.length === 0) return;
         yield* broadcastActivity(this, {
           action: "invoice.extraction.completed",
