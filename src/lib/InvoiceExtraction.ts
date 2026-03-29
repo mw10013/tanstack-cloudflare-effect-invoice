@@ -1,17 +1,45 @@
 import { Config, Effect, Layer, Redacted, Schema, ServiceMap } from "effect";
 import * as Encoding from "effect/Encoding";
+import * as Struct from "effect/Struct";
 import * as Headers from "effect/unstable/http/Headers";
 import * as HttpBody from "effect/unstable/http/HttpBody";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import { InvoiceExtractionFields, InvoiceItemExtractionFields } from "./OrganizationDomain";
+import { trimFields } from "./SchemaEx";
+import { Invoice, InvoiceItem } from "./OrganizationDomain";
 
 const InvoiceExtractionSchema = Schema.Struct({
-  ...InvoiceExtractionFields.fields,
+  ...trimFields(
+    Struct.pick(Invoice.fields, [
+      "invoiceConfidence",
+      "invoiceNumber",
+      "invoiceDate",
+      "dueDate",
+      "currency",
+      "vendorName",
+      "vendorEmail",
+      "vendorAddress",
+      "billToName",
+      "billToEmail",
+      "billToAddress",
+      "subtotal",
+      "tax",
+      "total",
+      "amountDue",
+    ]),
+  ),
   invoiceItems: Schema.Array(Schema.Struct({
-    ...InvoiceItemExtractionFields.fields,
+    ...trimFields(
+      Struct.pick(InvoiceItem.fields, [
+        "description",
+        "quantity",
+        "unitPrice",
+        "amount",
+        "period",
+      ]),
+    ),
   })),
 });
 
