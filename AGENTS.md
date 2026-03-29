@@ -2,6 +2,7 @@
 
 - Do not generate comments unless explicitly and specifically instructed.
 - Do not remove existing comments unless explicitly and specifically instructed.
+- Do not git commit unless you are explicitly instructed.
 - Your answers and explanations should be concise and scannable so the user can scan quickly and easily understand. Scarifice grammar for the sake of concision.
 - Ground your answers and explanations with excerpts from documentation and code.
 
