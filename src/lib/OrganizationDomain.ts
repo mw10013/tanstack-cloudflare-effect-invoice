@@ -1,5 +1,7 @@
 import * as Schema from "effect/Schema";
 
+const maxLength = (max: number) => Schema.String.check(Schema.isMaxLength(max));
+
 export const InvoiceStatusValues = [
   "extracting",
   "ready",
@@ -11,43 +13,43 @@ export type InvoiceStatus = typeof InvoiceStatus.Type;
 
 export const InvoiceExtractionFields = Schema.Struct({
   invoiceConfidence: Schema.Number,
-  invoiceNumber: Schema.String,
-  invoiceDate: Schema.String,
-  dueDate: Schema.String,
-  currency: Schema.String,
-  vendorName: Schema.String,
-  vendorEmail: Schema.String,
-  vendorAddress: Schema.String,
-  billToName: Schema.String,
-  billToEmail: Schema.String,
-  billToAddress: Schema.String,
-  subtotal: Schema.String,
-  tax: Schema.String,
-  total: Schema.String,
-  amountDue: Schema.String,
+  invoiceNumber: maxLength(100),
+  invoiceDate: maxLength(50),
+  dueDate: maxLength(50),
+  currency: maxLength(10),
+  vendorName: maxLength(500),
+  vendorEmail: maxLength(254),
+  vendorAddress: maxLength(2000),
+  billToName: maxLength(500),
+  billToEmail: maxLength(254),
+  billToAddress: maxLength(2000),
+  subtotal: maxLength(50),
+  tax: maxLength(50),
+  total: maxLength(50),
+  amountDue: maxLength(50),
 });
 
 export const InvoiceItemFields = Schema.Struct({
-  description: Schema.String,
-  quantity: Schema.String,
-  unitPrice: Schema.String,
-  amount: Schema.String,
-  period: Schema.String,
+  description: maxLength(2000),
+  quantity: maxLength(50),
+  unitPrice: maxLength(50),
+  amount: maxLength(50),
+  period: maxLength(50),
 });
 
 export const Invoice = Schema.Struct({
   id: Schema.String,
-  name: Schema.String,
-  fileName: Schema.String,
-  contentType: Schema.String,
+  name: maxLength(500),
+  fileName: maxLength(500),
+  contentType: maxLength(100),
   createdAt: Schema.Number,
   r2ActionTime: Schema.NullOr(Schema.Number),
   idempotencyKey: Schema.NullOr(Schema.String),
   r2ObjectKey: Schema.String,
   status: InvoiceStatus,
   ...InvoiceExtractionFields.fields,
-  extractedJson: Schema.NullOr(Schema.String),
-  error: Schema.NullOr(Schema.String),
+  extractedJson: Schema.NullOr(maxLength(100_000)),
+  error: Schema.NullOr(maxLength(10_000)),
 });
 export type Invoice = typeof Invoice.Type;
 
