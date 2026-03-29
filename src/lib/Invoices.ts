@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
-import * as OrganizationDomain from "@/lib/OrganizationDomain";
+import type * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { Request as AppRequest } from "@/lib/Request";
 
 const organizationIdSchema = Schema.Struct({
@@ -15,34 +15,6 @@ const getInvoiceWithItemsSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
   invoiceId: Schema.NonEmptyString,
 });
-
-export const updateInvoiceSchema = Schema.Struct({
-  organizationId: Schema.NonEmptyString,
-  invoiceId: Schema.NonEmptyString,
-  name: Schema.String,
-  ...OrganizationDomain.InvoiceUpdateFields.fields,
-  invoiceItems: Schema.Array(OrganizationDomain.InvoiceItemUpdateFields),
-});
-
-interface UpdateInvoiceInput {
-  readonly invoiceId: string;
-  readonly name: string;
-  readonly invoiceNumber: string;
-  readonly invoiceDate: string;
-  readonly dueDate: string;
-  readonly currency: string;
-  readonly vendorName: string;
-  readonly vendorEmail: string;
-  readonly vendorAddress: string;
-  readonly billToName: string;
-  readonly billToEmail: string;
-  readonly billToAddress: string;
-  readonly subtotal: string;
-  readonly tax: string;
-  readonly total: string;
-  readonly amountDue: string;
-  readonly invoiceItems: readonly (typeof OrganizationDomain.InvoiceItemUpdateFields.Type)[];
-}
 
 export const invoicesQueryKey = (organizationId: string) =>
   ["organization", organizationId, "invoices"] as const;
@@ -130,32 +102,5 @@ export const getInvoiceWithItems = createServerFn({ method: "GET" })
       }),
     ),
   );
-
-export const updateInvoiceWithAgent = (data: UpdateInvoiceInput & { organizationId: string }) =>
-  Effect.gen(function* () {
-    const stub = yield* getOrganizationAgentStub(data.organizationId);
-    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
-    return yield* Effect.tryPromise(() =>
-      stub.updateInvoice({
-        invoiceId: data.invoiceId,
-        name: data.name,
-        invoiceNumber: data.invoiceNumber,
-        invoiceDate: data.invoiceDate,
-        dueDate: data.dueDate,
-        currency: data.currency,
-        vendorName: data.vendorName,
-        vendorEmail: data.vendorEmail,
-        vendorAddress: data.vendorAddress,
-        billToName: data.billToName,
-        billToEmail: data.billToEmail,
-        billToAddress: data.billToAddress,
-        subtotal: data.subtotal,
-        tax: data.tax,
-        total: data.total,
-        amountDue: data.amountDue,
-        invoiceItems: data.invoiceItems,
-      }),
-    );
-  });
 
 export type InvoiceListItem = Awaited<ReturnType<typeof getInvoices>>[number];
