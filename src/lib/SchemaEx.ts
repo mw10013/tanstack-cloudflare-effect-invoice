@@ -1,16 +1,23 @@
-import { Array as Arr, Option, Schema, SchemaAST, SchemaGetter, SchemaTransformation, Struct } from "effect";
-
-/** Type guard that checks if a schema's AST root is the `string` type. */
-const isStringSchema = (s: Schema.Top): s is Schema.Schema<string> => SchemaAST.isString(s.ast);
+import { Array as Arr, Option, pipe, Schema, SchemaGetter, SchemaTransformation, Struct } from "effect";
 
 /**
- * Wrap every string-typed field in a struct fields record with a `trim()` decode step.
- * Non-string fields are passed through unchanged.
+ * A Struct.Lambda is a type-level function interface used by Struct.map/mapPick/mapOmit
+ * so TypeScript can track how value types change when transforming struct fields.
+ *
+ * - The call signature `<S>(self: S): S` defines the runtime behavior's type.
+ * - `"~lambda.in"` / `"~lambda.out"` are type-level "registers" that Struct.Apply reads:
+ *   it sets `~lambda.in` to the input type and reads `~lambda.out` for the result type.
+ * - Here `~lambda.out: this["~lambda.in"]` means "output type = input type" (identity),
+ *   so `Struct.map(fields, trimStringSchema)` preserves each field's schema type.
+ * - `Struct.lambda<L>(fn)` wraps a plain function with the Lambda type (zero runtime cost).
  */
-export const trimFields = <F extends Record<string, Schema.Top>>(fields: F) =>
-  Object.fromEntries(
-    Object.entries(fields).map(([k, v]) => [k, isStringSchema(v) ? v.pipe(Schema.decode(SchemaTransformation.trim())) : v]),
-  ) as F;
+interface TrimStringSchema extends Struct.Lambda {
+  <S extends Schema.Schema<string>>(self: S): S;
+  readonly "~lambda.out": this["~lambda.in"];
+}
+
+export const trimFields = <F extends Record<string, Schema.Schema<string>>>(fields: F): F =>
+  pipe(fields, Struct.map(Struct.lambda<TrimStringSchema>((s) => s.pipe(Schema.decode(SchemaTransformation.trim())))));
 
 /**
  * Extract a single field from a struct schema, returning the unwrapped value.

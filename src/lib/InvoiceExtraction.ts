@@ -23,9 +23,9 @@ export const InvoiceItemExtractionSchema = Schema.Struct(
 );
 
 export const InvoiceExtractionSchema = Schema.Struct({
+  invoiceConfidence: Invoice.fields.invoiceConfidence,
   ...trimFields(
     Struct.pick(Invoice.fields, [
-      "invoiceConfidence",
       "invoiceNumber",
       "invoiceDate",
       "dueDate",
