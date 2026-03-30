@@ -10,6 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as MagicLinkRouteImport } from './routes/magic-link'
+import { Route as Login1SuccessRouteImport } from './routes/login1-success'
+import { Route as Login1RouteImport } from './routes/login1'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as AdminRouteImport } from './routes/admin'
@@ -37,6 +39,16 @@ import { Route as ApiE2eDeleteUserEmailRouteImport } from './routes/api/e2e/dele
 const MagicLinkRoute = MagicLinkRouteImport.update({
   id: '/magic-link',
   path: '/magic-link',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Login1SuccessRoute = Login1SuccessRouteImport.update({
+  id: '/login1-success',
+  path: '/login1-success',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Login1Route = Login1RouteImport.update({
+  id: '/login1',
+  path: '/login1',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -166,6 +178,8 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteWithChildren
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/login1': typeof Login1Route
+  '/login1-success': typeof Login1SuccessRoute
   '/magic-link': typeof MagicLinkRoute
   '/pricing': typeof MktPricingRoute
   '/admin/customers': typeof AdminCustomersRoute
@@ -188,6 +202,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/login1': typeof Login1Route
+  '/login1-success': typeof Login1SuccessRoute
   '/magic-link': typeof MagicLinkRoute
   '/pricing': typeof MktPricingRoute
   '/admin/customers': typeof AdminCustomersRoute
@@ -213,6 +229,8 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteWithChildren
   '/app': typeof AppRouteWithChildren
   '/login': typeof LoginRoute
+  '/login1': typeof Login1Route
+  '/login1-success': typeof Login1SuccessRoute
   '/magic-link': typeof MagicLinkRoute
   '/_mkt/pricing': typeof MktPricingRoute
   '/admin/customers': typeof AdminCustomersRoute
@@ -241,6 +259,8 @@ export interface FileRouteTypes {
     | '/admin'
     | '/app'
     | '/login'
+    | '/login1'
+    | '/login1-success'
     | '/magic-link'
     | '/pricing'
     | '/admin/customers'
@@ -263,6 +283,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/login1'
+    | '/login1-success'
     | '/magic-link'
     | '/pricing'
     | '/admin/customers'
@@ -287,6 +309,8 @@ export interface FileRouteTypes {
     | '/admin'
     | '/app'
     | '/login'
+    | '/login1'
+    | '/login1-success'
     | '/magic-link'
     | '/_mkt/pricing'
     | '/admin/customers'
@@ -314,6 +338,8 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
   LoginRoute: typeof LoginRoute
+  Login1Route: typeof Login1Route
+  Login1SuccessRoute: typeof Login1SuccessRoute
   MagicLinkRoute: typeof MagicLinkRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiE2eDeleteUserEmailRoute: typeof ApiE2eDeleteUserEmailRoute
@@ -327,6 +353,20 @@ declare module '@tanstack/react-router' {
       path: '/magic-link'
       fullPath: '/magic-link'
       preLoaderRoute: typeof MagicLinkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login1-success': {
+      id: '/login1-success'
+      path: '/login1-success'
+      fullPath: '/login1-success'
+      preLoaderRoute: typeof Login1SuccessRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login1': {
+      id: '/login1'
+      path: '/login1'
+      fullPath: '/login1'
+      preLoaderRoute: typeof Login1RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -576,6 +616,8 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   AppRoute: AppRouteWithChildren,
   LoginRoute: LoginRoute,
+  Login1Route: Login1Route,
+  Login1SuccessRoute: Login1SuccessRoute,
   MagicLinkRoute: MagicLinkRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiE2eDeleteUserEmailRoute: ApiE2eDeleteUserEmailRoute,
