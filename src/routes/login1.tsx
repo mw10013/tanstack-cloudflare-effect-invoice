@@ -1,9 +1,3 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { Config, Effect } from "effect";
-import * as Schema from "effect/Schema";
-import { AlertCircle } from "lucide-react";
-
 import {
   createServerValidate,
   formOptions,
@@ -13,7 +7,12 @@ import {
   useForm,
   useTransform,
 } from "@tanstack/react-form-start";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useStore } from "@tanstack/react-store";
+import { Config, Effect } from "effect";
+import * as Schema from "effect/Schema";
+import { AlertCircle } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -36,7 +35,11 @@ import { KV } from "@/lib/KV";
 import { Request } from "@/lib/Request";
 
 const loginSchema = Schema.Struct({
-  email: Schema.String.check(Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)),
+  email: Schema.String.check(
+    Schema.isPattern(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, {
+      message: "Please enter a valid email address",
+    }),
+  ),
 });
 
 const loginFormOpts = formOptions({
@@ -147,20 +150,46 @@ function RouteComponent() {
             encType="multipart/form-data"
           >
             <FieldGroup>
-              {formErrors.map((error, i) => (
-                <Alert key={i} variant="destructive">
-                  <AlertCircle className="size-4" />
-                  <AlertTitle>Error</AlertTitle>
-                  <AlertDescription>{String(error)}</AlertDescription>
-                </Alert>
-              ))}
+              {formErrors.flatMap((error, i) => {
+                if (typeof error === "string") {
+                  return [
+                    <Alert key={String(i)} variant="destructive">
+                      <AlertCircle className="size-4" />
+                      <AlertTitle>Error</AlertTitle>
+                      <AlertDescription>{error}</AlertDescription>
+                    </Alert>,
+                  ];
+                }
+                if (error && typeof error === "object") {
+                  return Object.values(
+                    error as Record<
+                      string,
+                      { message: string }[] | undefined
+                    >,
+                  ).flatMap((issues, j) =>
+                    (issues ?? []).map((issue) => (
+                      <Alert
+                        key={`${String(i)}-${String(j)}`}
+                        variant="destructive"
+                      >
+                        <AlertCircle className="size-4" />
+                        <AlertTitle>Error</AlertTitle>
+                        <AlertDescription>{issue.message}</AlertDescription>
+                      </Alert>
+                    )),
+                  );
+                }
+                return [];
+              })}
               <form.Field
                 name="email"
                 validators={{
-                  onBlur: ({ value }) =>
-                    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
-                      ? { message: "Please enter a valid email address" }
-                      : undefined,
+                  // eslint-disable-next-line unicorn/no-useless-undefined -- noop placeholder while client validation is disabled for testing
+                  onBlur: () => undefined,
+                  // onBlur: ({ value }) =>
+                  // !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+                  //   ? { message: "Please enter a valid email address" }
+                  //   : undefined,
                 }}
               >
                 {(field) => {
@@ -171,7 +200,7 @@ function RouteComponent() {
                       <Input
                         id={field.name}
                         name={field.name}
-                        type="email"
+                        // type="email"
                         value={field.state.value}
                         onBlur={field.handleBlur}
                         onChange={(e) => {
