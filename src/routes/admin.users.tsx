@@ -399,8 +399,13 @@ function BanDialog({
   const router = useRouter();
   const isHydrated = useHydrated();
   const banUserServerFn = useServerFn(banUser);
+  const defaultValues = {
+    userId: userId ?? "",
+    banReason: "",
+  } satisfies typeof banUserSchema.Type;
+
   const banUserMutation = useMutation({
-    mutationFn: async (data: typeof banUserSchema.Type) =>
+    mutationFn: async (data: typeof defaultValues) =>
       banUserServerFn({ data }),
     onSuccess: () => {
       onOpenChange(false);
@@ -409,10 +414,7 @@ function BanDialog({
   });
 
   const form = useForm({
-    defaultValues: {
-      userId: userId ?? "",
-      banReason: "",
-    },
+    defaultValues,
     validators: {
       onSubmit: Schema.toStandardSchemaV1(banUserSchema),
     },

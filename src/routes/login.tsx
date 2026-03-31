@@ -84,13 +84,15 @@ function RouteComponent() {
   const { isDemoMode } = Route.useLoaderData();
   const isHydrated = useHydrated();
   const loginServerFn = useServerFn(login);
+  const defaultValues = {
+    email: "",
+  } satisfies typeof loginSchema.Type;
+
   const loginMutation = useMutation({
-    mutationFn: (data: typeof loginSchema.Type) => loginServerFn({ data }),
+    mutationFn: (data: typeof defaultValues) => loginServerFn({ data }),
   });
   const form = useForm({
-    defaultValues: {
-      email: "",
-    },
+    defaultValues,
     validators: {
       onSubmit: Schema.toStandardSchemaV1(loginSchema),
     },

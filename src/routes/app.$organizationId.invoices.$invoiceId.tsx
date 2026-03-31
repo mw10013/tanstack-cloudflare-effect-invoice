@@ -65,8 +65,13 @@ function RouteComponent() {
   const router = useRouter();
   const { stub } = useOrganizationAgent();
 
+  const defaultValues = {
+    ...Struct.pick(invoice, ["name", "invoiceNumber", "invoiceDate", "dueDate", "currency", "vendorName", "vendorEmail", "vendorAddress", "billToName", "billToEmail", "billToAddress", "subtotal", "tax", "total", "amountDue"]),
+    invoiceItems: invoice.invoiceItems.map((item) => Struct.pick(item, ["description", "quantity", "unitPrice", "amount", "period"])),
+  } satisfies typeof InvoiceFormSchema.Type;
+
   const saveMutation = useMutation({
-    mutationFn: (data: typeof InvoiceFormSchema.Type) =>
+    mutationFn: (data: typeof defaultValues) =>
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
       stub.updateInvoice({ invoiceId, ...data }),
     onSuccess: () => {
@@ -75,15 +80,12 @@ function RouteComponent() {
   });
 
   const form = useForm({
-    defaultValues: {
-      ...Struct.pick(invoice, ["name", "invoiceNumber", "invoiceDate", "dueDate", "currency", "vendorName", "vendorEmail", "vendorAddress", "billToName", "billToEmail", "billToAddress", "subtotal", "tax", "total", "amountDue"]),
-      invoiceItems: invoice.invoiceItems.map((item) => Struct.pick(item, ["description", "quantity", "unitPrice", "amount", "period"])),
-    },
+    defaultValues,
     validators: {
       onSubmit: invoiceFormStandardSchema,
     },
     onSubmit: ({ value }) => {
-      void saveMutation.mutateAsync(value as typeof InvoiceFormSchema.Type);
+      void saveMutation.mutateAsync(value);
     },
   });
 

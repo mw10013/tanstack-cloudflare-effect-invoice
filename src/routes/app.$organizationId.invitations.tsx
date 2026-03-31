@@ -197,8 +197,14 @@ function InviteForm({ organizationId }: { organizationId: string }) {
   const router = useRouter();
   const isHydrated = useHydrated();
   const inviteServerFn = useServerFn(invite);
+  const defaultValues = {
+    organizationId,
+    emails: "",
+    role: "member" as Extract<Domain.MemberRole, "member" | "admin">,
+  } satisfies typeof inviteSchema.Encoded;
+
   const inviteMutation = useMutation({
-    mutationFn: (data: typeof inviteSchema.Encoded) => inviteServerFn({ data }),
+    mutationFn: (data: typeof defaultValues) => inviteServerFn({ data }),
     onSuccess: () => {
       form.reset();
       void router.invalidate();
@@ -206,11 +212,7 @@ function InviteForm({ organizationId }: { organizationId: string }) {
   });
 
   const form = useForm({
-    defaultValues: {
-      organizationId,
-      emails: "",
-      role: "member" as Extract<Domain.MemberRole, "member" | "admin">,
-    },
+    defaultValues,
     validators: {
       onSubmit: Schema.toStandardSchemaV1(inviteSchema),
     },
