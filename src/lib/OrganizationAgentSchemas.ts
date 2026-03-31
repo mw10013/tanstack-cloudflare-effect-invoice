@@ -39,8 +39,8 @@ export const UpdateInvoiceInput = Schema.Struct({
 });
 
 export const UploadInvoiceInput = Schema.Struct({
-  fileName: Schema.NonEmptyString,
-  contentType: Schema.NonEmptyString,
+  fileName: Invoice.fields.fileName.check(Schema.isNonEmpty()),
+  contentType: Invoice.fields.contentType.check(Schema.isNonEmpty()),
   base64: Schema.NonEmptyString,
 });
 
