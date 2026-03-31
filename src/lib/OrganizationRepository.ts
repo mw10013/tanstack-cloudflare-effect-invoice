@@ -31,8 +31,8 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
-      const getInvoiceWithItems = Effect.fn(
-        "OrganizationRepository.getInvoiceWithItems",
+      const getInvoice = Effect.fn(
+        "OrganizationRepository.getInvoice",
       )(function* (invoiceId: string) {
         const rows = yield* sql`
           select json_object(
@@ -259,7 +259,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
                 values (${id}, ${input.invoiceId}, ${order}, ${item.description}, ${item.quantity}, ${item.unitPrice}, ${item.amount}, ${item.period})
               `;
             }
-            return yield* getInvoiceWithItems(input.invoiceId);
+            return yield* getInvoice(input.invoiceId);
           });
         },
       );
@@ -267,7 +267,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       return {
         findInvoice,
         getInvoices,
-        getInvoiceWithItems,
+        getInvoice,
         upsertInvoice,
         createInvoice,
         updateInvoice,

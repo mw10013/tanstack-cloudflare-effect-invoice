@@ -8,6 +8,8 @@ import {
   useHydrated,
   useRouter,
 } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
+import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, ExternalLink, FilePenLine, Loader2, Plus, Trash2 } from "lucide-react";
@@ -24,21 +26,33 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { getInvoiceDetail } from "@/lib/Invoices";
+import { getInvoiceViewUrl, getOrganizationAgentStub } from "@/lib/Invoices";
 import { InvoiceFormSchema } from "@/lib/OrganizationDomain";
+import type * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { useOrganizationAgent } from "@/lib/OrganizationAgentContext";
 import { Textarea } from "@/components/ui/textarea";
 
 const invoiceFormStandardSchema = Schema.toStandardSchemaV1(InvoiceFormSchema);
 const emptyInvoiceItem = () => ({ description: "", quantity: "", unitPrice: "", amount: "", period: "" });
 
+const getLoaderData = createServerFn({ method: "GET" })
+  .inputValidator(Schema.toStandardSchemaV1(Schema.Struct({ organizationId: Schema.NonEmptyString, invoiceId: Schema.NonEmptyString })))
+  .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const stub = yield* getOrganizationAgentStub(organizationId);
+        const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
+          () => stub.getInvoice(invoiceId),
+        );
+        if (!invoice) return yield* Effect.die(notFound());
+        const viewUrl = yield* getInvoiceViewUrl(organizationId, invoice);
+        return { invoice: structuredClone(invoice), viewUrl };
+      }),
+    ),
+  );
+
 export const Route = createFileRoute("/app/$organizationId/invoices/$invoiceId")({
-  loader: async ({ params }) => {
-    const data = await getInvoiceDetail({ data: params });
-    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router notFound() returns a special non-Error object
-    if (!data) throw notFound();
-    return data;
-  },
+  loader: ({ params }) => getLoaderData({ data: params }),
   component: RouteComponent,
 });
 

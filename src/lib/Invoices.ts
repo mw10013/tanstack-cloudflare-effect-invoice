@@ -11,7 +11,7 @@ const organizationIdSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
 });
 
-const getInvoiceWithItemsSchema = Schema.Struct({
+const invoiceParamsSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
   invoiceId: Schema.NonEmptyString,
 });
@@ -22,7 +22,7 @@ export const invoicesQueryKey = (organizationId: string) =>
 export const invoiceQueryKey = (organizationId: string, invoiceId: string) =>
   ["organization", organizationId, "invoice", invoiceId] as const;
 
-const getOrganizationAgentStub = (organizationId: string) =>
+export const getOrganizationAgentStub = (organizationId: string) =>
   Effect.gen(function* () {
     const request = yield* AppRequest;
     const auth = yield* Auth;
@@ -87,23 +87,21 @@ export const getInvoices = createServerFn({ method: "GET" })
     ),
   );
 
-export const getInvoiceWithItems = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(getInvoiceWithItemsSchema))
+export const getInvoice = createServerFn({ method: "GET" })
+  .inputValidator(Schema.toStandardSchemaV1(invoiceParamsSchema))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
     runEffect(
       Effect.gen(function* () {
         const stub = yield* getOrganizationAgentStub(organizationId);
-        // Type annotation strips Disposable from DO stub return type;
-        // structuredClone strips it at runtime for TanStack Start serialization.
         const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
-          () => stub.getInvoiceWithItems(invoiceId),
+          () => stub.getInvoice(invoiceId),
         );
         return invoice ? structuredClone(invoice) : null;
       }),
     ),
   );
 
-const getInvoiceViewUrl = (
+export const getInvoiceViewUrl = (
   organizationId: string,
   invoice: OrganizationDomain.InvoiceWithItems,
 ) =>
@@ -135,20 +133,5 @@ const getInvoiceViewUrl = (
     return signed.url;
   });
 
-export const getInvoiceDetail = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(getInvoiceWithItemsSchema))
-  .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
-    runEffect(
-      Effect.gen(function* () {
-        const stub = yield* getOrganizationAgentStub(organizationId);
-        const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
-          () => stub.getInvoiceWithItems(invoiceId),
-        );
-        if (!invoice) return null;
-        const viewUrl = yield* getInvoiceViewUrl(organizationId, invoice);
-        return { invoice: structuredClone(invoice), viewUrl };
-      }),
-    ),
-  );
 
 export type InvoiceListItem = Awaited<ReturnType<typeof getInvoices>>[number];

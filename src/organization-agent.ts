@@ -375,11 +375,11 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   @callable()
-  getInvoiceWithItems(invoiceId: string) {
+  getInvoice(invoiceId: string) {
     return this.runEffect(
       Effect.gen(function* () {
         const repo = yield* OrganizationRepository;
-        return yield* repo.getInvoiceWithItems(invoiceId).pipe(
+        return yield* repo.getInvoice(invoiceId).pipe(
           Effect.map(Option.getOrNull),
         );
       }),

@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import {
   getInvoices,
-  getInvoiceWithItems,
+  getInvoice,
   invoiceQueryKey,
   invoicesQueryKey,
   type InvoiceListItem,
@@ -138,14 +138,14 @@ function RouteComponent() {
     },
   });
 
-  const getInvoiceWithItemsFn = useServerFn(getInvoiceWithItems);
+  const getInvoiceFn = useServerFn(getInvoice);
   const invoiceQuery = useQuery<InvoiceWithItems | null>({
     queryKey: [
       ...invoiceQueryKey(organizationId, selectedInvoice?.id ?? ""),
-      getInvoiceWithItemsFn,
+      getInvoiceFn,
     ],
     queryFn: () =>
-      getInvoiceWithItemsFn({
+      getInvoiceFn({
         data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
       }),
     enabled: selectedInvoice !== null && selectedInvoice.status === "ready",
