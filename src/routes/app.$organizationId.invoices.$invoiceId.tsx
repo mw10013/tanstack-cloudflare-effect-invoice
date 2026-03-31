@@ -1,13 +1,15 @@
 /* oxlint-disable @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-confusing-void-expression -- TanStack Form: number-indexed template literals, void-returning field methods */
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   createFileRoute,
   Link,
+  notFound,
   useHydrated,
   useRouter,
 } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import { AlertCircle, ArrowDown, ArrowLeft, ArrowUp, ExternalLink, FilePenLine, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -22,37 +24,21 @@ import {
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  getInvoiceDetail,
-  invoicesQueryKey,
-} from "@/lib/Invoices";
-import type * as OrganizationDomain from "@/lib/OrganizationDomain";
+import { getInvoiceDetail } from "@/lib/Invoices";
 import { InvoiceFormSchema } from "@/lib/OrganizationDomain";
 import { useOrganizationAgent } from "@/lib/OrganizationAgentContext";
 import { Textarea } from "@/components/ui/textarea";
 
 const invoiceFormStandardSchema = Schema.toStandardSchemaV1(InvoiceFormSchema);
-
-const emptyInvoiceItem = () => ({
-  description: "",
-  quantity: "",
-  unitPrice: "",
-  amount: "",
-  period: "",
-});
-
-const toDefaultValues = ({ name, invoiceNumber, invoiceDate, dueDate, currency, vendorName, vendorEmail, vendorAddress, billToName, billToEmail, billToAddress, subtotal, tax, total, amountDue, items }: OrganizationDomain.InvoiceWithItems) => ({
-  name, invoiceNumber, invoiceDate, dueDate, currency,
-  vendorName, vendorEmail, vendorAddress,
-  billToName, billToEmail, billToAddress,
-  subtotal, tax, total, amountDue,
-  invoiceItems: items.length > 0
-    ? items.map(({ description, quantity, unitPrice, amount, period }) => ({ description, quantity, unitPrice, amount, period }))
-    : [emptyInvoiceItem()],
-});
+const emptyInvoiceItem = () => ({ description: "", quantity: "", unitPrice: "", amount: "", period: "" });
 
 export const Route = createFileRoute("/app/$organizationId/invoices/$invoiceId")({
-  loader: ({ params }) => getInvoiceDetail({ data: params }),
+  loader: async ({ params }) => {
+    const data = await getInvoiceDetail({ data: params });
+    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router notFound() returns a special non-Error object
+    if (!data) throw notFound();
+    return data;
+  },
   component: RouteComponent,
 });
 
@@ -61,7 +47,6 @@ function RouteComponent() {
   const { invoice, viewUrl } = Route.useLoaderData();
   const isHydrated = useHydrated();
   const router = useRouter();
-  const queryClient = useQueryClient();
   const { stub } = useOrganizationAgent();
 
   const saveMutation = useMutation({
@@ -71,15 +56,13 @@ function RouteComponent() {
     onSuccess: () => {
       void router.invalidate();
     },
-    onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: invoicesQueryKey(organizationId),
-      });
-    },
   });
 
   const form = useForm({
-    defaultValues: invoice ? toDefaultValues(invoice) : toDefaultValues({} as OrganizationDomain.InvoiceWithItems),
+    defaultValues: {
+      ...Struct.pick(invoice, ["name", "invoiceNumber", "invoiceDate", "dueDate", "currency", "vendorName", "vendorEmail", "vendorAddress", "billToName", "billToEmail", "billToAddress", "subtotal", "tax", "total", "amountDue"]),
+      invoiceItems: invoice.invoiceItems.map((item) => Struct.pick(item, ["description", "quantity", "unitPrice", "amount", "period"])),
+    },
     validators: {
       onSubmit: invoiceFormStandardSchema,
     },
@@ -88,15 +71,7 @@ function RouteComponent() {
     },
   });
 
-  const canEdit = invoice?.status === "ready" || invoice?.status === "error";
-
-  if (!invoice) {
-    return (
-      <div className="flex flex-col gap-6 p-6">
-        <p className="text-sm text-muted-foreground">Invoice not found.</p>
-      </div>
-    );
-  }
+  const canEdit = invoice.status === "ready" || invoice.status === "error";
 
   return (
     <div className="flex flex-col gap-6 p-6">

@@ -144,7 +144,7 @@ export const getInvoiceDetail = createServerFn({ method: "GET" })
         const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
           () => stub.getInvoiceWithItems(invoiceId),
         );
-        if (!invoice) return { invoice: null, viewUrl: undefined as string | undefined };
+        if (!invoice) return null;
         const viewUrl = yield* getInvoiceViewUrl(organizationId, invoice);
         return { invoice: structuredClone(invoice), viewUrl };
       }),

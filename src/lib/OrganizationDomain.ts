@@ -56,7 +56,7 @@ export type InvoiceItem = typeof InvoiceItem.Type;
 
 export const InvoiceWithItems = Schema.Struct({
   ...Invoice.fields,
-  items: Schema.Array(InvoiceItem),
+  invoiceItems: Schema.Array(InvoiceItem),
 });
 export type InvoiceWithItems = typeof InvoiceWithItems.Type;
 
@@ -92,7 +92,7 @@ export const InvoiceFormSchema = Schema.Struct({
       "amountDue",
     ]),
   ),
-  invoiceItems: Schema.mutable(Schema.NonEmptyArray(InvoiceItemFormSchema)),
+  invoiceItems: Schema.mutable(Schema.Array(InvoiceItemFormSchema)),
 });
 
 export class OrganizationAgentError extends Schema.TaggedErrorClass<OrganizationAgentError>()(

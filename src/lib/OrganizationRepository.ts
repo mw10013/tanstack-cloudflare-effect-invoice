@@ -62,7 +62,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
             'amountDue', i.amountDue,
             'extractedJson', i.extractedJson,
             'error', i.error,
-            'items', coalesce(
+            'invoiceItems', coalesce(
               (
                 select json_group_array(
                   json_object(

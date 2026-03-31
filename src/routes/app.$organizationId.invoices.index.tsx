@@ -448,7 +448,7 @@ function RouteComponent() {
                               Loading line items...
                             </div>
                           );
-                        if (invoice && invoice.items.length > 0)
+                        if (invoice && invoice.invoiceItems.length > 0)
                           return (
                             <Table>
                               <TableHeader>
@@ -460,7 +460,7 @@ function RouteComponent() {
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {invoice.items.map((item: InvoiceWithItems["items"][number]) => (
+                                {invoice.invoiceItems.map((item: InvoiceWithItems["invoiceItems"][number]) => (
                                   <TableRow key={item.id}>
                                     <TableCell>
                                       <p>{item.description || "—"}</p>
