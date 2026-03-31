@@ -41,6 +41,7 @@ const getLoaderData = createServerFn({ method: "GET" })
     runEffect(
       Effect.gen(function* () {
         const stub = yield* getOrganizationAgentStub(organizationId);
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
         const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
           () => stub.getInvoice(invoiceId),
         );

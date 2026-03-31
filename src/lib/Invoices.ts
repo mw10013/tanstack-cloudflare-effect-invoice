@@ -7,11 +7,11 @@ import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import type * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { Request as AppRequest } from "@/lib/Request";
 
-const organizationIdSchema = Schema.Struct({
+const OrganizationIdSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
 });
 
-const invoiceParamsSchema = Schema.Struct({
+const InvoiceParamsSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
   invoiceId: Schema.NonEmptyString,
 });
@@ -39,7 +39,7 @@ export const getOrganizationAgentStub = (organizationId: string) =>
   });
 
 export const getInvoices = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(organizationIdSchema))
+  .inputValidator(Schema.toStandardSchemaV1(OrganizationIdSchema))
   .handler(({ context: { runEffect }, data: { organizationId } }) =>
     runEffect(
       Effect.gen(function* () {
@@ -88,7 +88,7 @@ export const getInvoices = createServerFn({ method: "GET" })
   );
 
 export const getInvoice = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(invoiceParamsSchema))
+  .inputValidator(Schema.toStandardSchemaV1(InvoiceParamsSchema))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
     runEffect(
       Effect.gen(function* () {
