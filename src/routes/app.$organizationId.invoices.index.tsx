@@ -7,6 +7,7 @@ import {
   useNavigate,
 } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import * as Schema from "effect/Schema";
 import { AlertCircle, Copy, FilePenLine, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -47,29 +48,30 @@ const getStatusVariant = (
   return "secondary";
 };
 
+const invoiceSearchSchema = Schema.Struct({
+  selectedInvoiceId: Schema.optional(Schema.String),
+});
+
 export const Route = createFileRoute("/app/$organizationId/invoices/")({
+  validateSearch: Schema.toStandardSchemaV1(invoiceSearchSchema),
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const { organizationId } = Route.useParams();
+  const { selectedInvoiceId } = Route.useSearch();
   const isHydrated = useHydrated();
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const queryClient = useQueryClient();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [selectedInvoiceId, setSelectedInvoiceId] = React.useState<string | null>(
-    null,
-  );
   const [copiedField, setCopiedField] = React.useState<"json" | null>(null);
 
-  const invoicesQuery = useQuery({
-    queryKey: invoicesQueryKey(organizationId),
-    queryFn: () => getInvoices({ data: { organizationId } }),
-  });
-  const invoices = invoicesQuery.data ?? [];
-
-  const selectedInvoice =
-    invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
+  const setSelectedInvoiceId = React.useCallback(
+    (invoiceId: string | undefined) => {
+      void navigate({ search: (prev) => ({ ...prev, selectedInvoiceId: invoiceId }), replace: true });
+    },
+    [navigate],
+  );
 
   const copyText = React.useCallback(async (value: string, field: "json") => {
     await navigator.clipboard.writeText(value);
@@ -79,19 +81,14 @@ function RouteComponent() {
     }, 2000);
   }, []);
 
-  React.useEffect(() => {
-    if (selectedInvoiceId === null && invoicesQuery.data?.[0]) {
-      setSelectedInvoiceId(invoicesQuery.data[0].id);
-      return;
-    }
-    if (
-      selectedInvoiceId !== null &&
-      invoicesQuery.data &&
-      !invoicesQuery.data.some((invoice) => invoice.id === selectedInvoiceId)
-    ) {
-      setSelectedInvoiceId(invoicesQuery.data[0]?.id ?? null);
-    }
-  }, [invoicesQuery.data, selectedInvoiceId]);
+  const invoicesQuery = useQuery({
+    queryKey: invoicesQueryKey(organizationId),
+    queryFn: () => getInvoices({ data: { organizationId } }),
+  });
+  const invoices = invoicesQuery.data ?? [];
+
+  const selectedInvoice =
+    invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
 
   const { stub } = useOrganizationAgent();
   const uploadMutation = useMutation({
@@ -301,7 +298,7 @@ function RouteComponent() {
                     {invoices.map((invoice) => (
                       <TableRow
                         key={invoice.id}
-                        data-state={selectedInvoiceId === invoice.id ? "selected" : undefined}
+                        data-state={selectedInvoice?.id === invoice.id ? "selected" : undefined}
                         className="h-12"
                         onClick={() => {
                           setSelectedInvoiceId(invoice.id);

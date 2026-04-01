@@ -18,8 +18,9 @@ The invoice index route is already a hybrid loader-plus-query route, not a pure 
 - The child index route `src/routes/app.$organizationId.invoices.index.tsx` reads that prefetched list with `useQuery`.
 - The real client-side fetch is the second query for the selected invoice's full detail payload.
 - `useAgent` and broadcast invalidation are orthogonal to loaders. They do not force you to choose client-only queries. They work well with loader-prefetched query data.
+- Selected invoice is driven by URL search params (`?selectedInvoiceId=...`) via `validateSearch`, not local React state.
 
-My conclusion: the current list-loading pattern is reasonable and matches TanStack's recommended router-plus-query composition. The part that feels conceptually messy is the local-state master/detail selection, not the list loader itself.
+My conclusion: the current list-loading pattern is reasonable and matches TanStack's recommended router-plus-query composition.
 
 ## What The Route Actually Does Today
 
@@ -128,7 +129,7 @@ It is also a deliberate one: the list query returns a lightweight list item shap
 So your mental model can be simplified to:
 
 - invoices list: loader-prefetched and cache-backed
-- selected detail pane: client-selected and client-fetched
+- selected detail pane: URL-selected via search params, client-fetched
 
 ## Does `enabled` Matter Here?
 
@@ -329,15 +330,7 @@ There are three separate reasons Query is useful here:
 2. client-side refetch/invalidation in response to websocket notifications
 3. client-driven fetching for whichever invoice row is currently selected
 
-The third item is the biggest reason the index route still has a second query. The selected invoice is controlled by local React state:
-
-```tsx
-const [selectedInvoiceId, setSelectedInvoiceId] = React.useState<string | null>(null);
-```
-
-A loader does not react to arbitrary local state changes. It reacts to navigation, route matching, search param changes, and router invalidation.
-
-That is the core design pressure here.
+The third item is the biggest reason the index route still has a second query. The selected invoice is controlled by URL search params via `validateSearch`, so selection changes are URL navigations that the router tracks.
 
 ## About "New Invoice Should Be Simple Request/Response"
 
@@ -375,51 +368,33 @@ For `createInvoice`, that duplication is mostly about convenience and cross-clie
 
 ### What I would keep
 
-I would keep the parent invoices route loader exactly as a loader-plus-query-cache prefetch. It is a good pattern here.
+The parent invoices route loader as a loader-plus-query-cache prefetch. It is a good pattern here.
 
-Reasons:
+- SSR-friendly first render for the invoices list
+- matches TanStack's documented examples
+- composes cleanly with broadcast-driven query invalidation
+- keeps the list fresh without forcing everything through `Route.useLoaderData()`
 
-- it already gives you SSR-friendly first render for the invoices list
-- it matches TanStack's documented examples
-- it composes cleanly with broadcast-driven query invalidation
-- it keeps the list fresh without forcing everything through `Route.useLoaderData()`
+### Current state: selection is URL-driven
 
-### What I would not do
+Selected invoice is driven by URL search params (`?selectedInvoiceId=...`) via `validateSearch` on the index route. Row clicks update the URL with `replace: true`. If no `selectedInvoiceId` is in the URL, the component falls back to the first invoice in the list.
 
-I would not convert the current master/detail index page to pure loader data while keeping row selection in local component state.
-
-That would make the data model harder, not simpler, because loaders do not naturally follow local row selection.
-
-### Simplest next step if you want a loader-first mental model
-
-Move the selected invoice into the URL, then let the loader follow the URL.
-
-Concretely:
-
-1. store selected invoice id in search params, not local React state
-2. add `loaderDeps` based on that selected invoice id
-3. in the index route loader, prefetch the selected invoice query too
-4. let row clicks update the URL instead of local state
-
-That would make the page more loader-shaped:
-
-- route URL chooses selected invoice
-- loader prefetches both list and selected detail
-- component renders from already-resolved route state or cache
+This means loaders can now follow selection via `loaderDeps` if we move to a loader-first model.
 
 ### Simplest next step if you want less complexity overall
 
 Reduce how much detail the index page shows.
 
-The full detail pane is what creates the second query and the local-selection complexity. If the index page became a list plus lightweight summary, and full detail lived only on `/app/$organizationId/invoices/$invoiceId`, the mental model gets much simpler.
+The full detail pane is what creates the second query. If the index page became a list plus lightweight summary, and full detail lived only on `/app/$organizationId/invoices/$invoiceId`, the mental model gets simpler.
 
-## Comparison: URL Selection Without Query
+## Comparison: Without Query
 
 This section sketches the same page shape without TanStack Query.
 
+Selection already lives in the URL. The remaining question is whether the page should also drop Query in favor of pure loader data.
+
 Goal:
 
-- selection lives in the URL
 - loader owns all data fetching
 - component renders only `Route.useLoaderData()`
 - websocket messages trigger `router.invalidate()` instead of `queryClient.invalidateQueries()`
@@ -473,7 +448,7 @@ export const Route = createFileRoute("/app/$organizationId/invoices/")({
 });
 ```
 
-That is the big conceptual shift. Selection stops being local UI state and becomes route state.
+Selection is already in URL search params. The shift here is that the loader also uses it via `loaderDeps`.
 
 ### Loader shape
 
@@ -801,12 +776,13 @@ It is:
 
 - loader-prefetched invoices list
 - query-backed cache subscription for that list
-- client-driven dependent query for the selected invoice detail pane
+- URL-driven selection via search params
+- client-fetched detail query for the selected invoice
 - websocket notifications that invalidate query-backed data
 
 So the clean framing is:
 
-- list loading is already in a good loader-based place
-- selected detail loading is where the complexity and waterfall live
+- list loading is in a good loader-based place
+- selected detail loading is where the waterfall lives
 - `useAgent` does not block loader usage
-- a loader-first simplification only really pays off if selection moves into the URL or the index page shows less detail
+- the remaining decision is Query vs pure loader for this page's data flow
