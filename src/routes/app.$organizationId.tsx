@@ -4,11 +4,13 @@ import type { OrganizationAgent, OrganizationAgentState } from "@/organization-a
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createFileRoute,
+  getRouteApi,
   Link,
   notFound,
   Outlet,
   useMatchRoute,
   useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
 import { useAgent } from "agents/react";
@@ -103,6 +105,8 @@ const beforeLoadServerFn = createServerFn({ method: "GET" })
     ),
   );
 
+const invoicesIndexRoute = getRouteApi("/app/$organizationId/invoices/");
+
 export const Route = createFileRoute("/app/$organizationId")({
   beforeLoad: async ({ params }) =>
     await beforeLoadServerFn({ data: params.organizationId }),
@@ -113,6 +117,7 @@ function RouteComponent() {
   const { organizationId } = Route.useParams();
   const { organization, organizations, sessionUser } = Route.useRouteContext();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const agent = useAgent<OrganizationAgent, OrganizationAgentState>({
     agent: "organization-agent",
@@ -126,11 +131,8 @@ function RouteComponent() {
           [message, ...(current ?? [])].slice(0, 50),
       );
       if (shouldInvalidateForInvoice(message.action)) {
-        void queryClient.invalidateQueries({
-          queryKey: ["organization", organizationId, "invoices"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["organization", organizationId, "invoice"],
+        void router.invalidate({
+          filter: (match) => match.routeId === invoicesIndexRoute.id,
         });
       }
     },

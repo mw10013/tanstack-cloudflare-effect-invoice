@@ -1,12 +1,15 @@
 import * as React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   Link,
   createFileRoute,
+  redirect,
   useHydrated,
   useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
+import { createServerFn } from "@tanstack/react-start";
+import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import { AlertCircle, Copy, FilePenLine, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
 
@@ -31,10 +34,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  getInvoices,
-  getInvoice,
-  invoiceQueryKey,
-  invoicesQueryKey,
+  getInvoiceEffect,
+  getInvoicesEffect,
   type InvoiceListItem,
 } from "@/lib/Invoices";
 import type { InvoiceWithItems } from "@/lib/OrganizationDomain";
@@ -52,22 +53,87 @@ const invoiceSearchSchema = Schema.Struct({
   selectedInvoiceId: Schema.optional(Schema.String),
 });
 
+const getLoaderData = createServerFn({ method: "GET" })
+  .inputValidator(
+    Schema.toStandardSchemaV1(
+      Schema.Struct({
+        organizationId: Schema.NonEmptyString,
+        selectedInvoiceId: Schema.optional(Schema.String),
+      }),
+    ),
+  )
+  .handler(({ context: { runEffect }, data: { organizationId, selectedInvoiceId } }) =>
+    runEffect(
+      Effect.gen(function* () {
+        const invoices: readonly InvoiceListItem[] = yield* getInvoicesEffect(organizationId);
+
+        if (!selectedInvoiceId)
+          return {
+            invoice: null,
+            invoices,
+            selectedInvoice: null,
+            selectedInvoiceId: null,
+          } satisfies {
+            invoice: InvoiceWithItems | null;
+            invoices: readonly InvoiceListItem[];
+            selectedInvoice: InvoiceListItem | null;
+            selectedInvoiceId: string | null;
+          };
+
+        const selectedInvoice =
+          invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null;
+
+        if (!selectedInvoice)
+          return yield* Effect.die(
+            redirect({
+              params: { organizationId },
+              search: {},
+              to: "/app/$organizationId/invoices",
+            }),
+          );
+
+        const invoice =
+          selectedInvoice.status === "ready"
+            ? yield* getInvoiceEffect(organizationId, selectedInvoice.id)
+            : null;
+
+        return {
+          invoice,
+          invoices,
+          selectedInvoice,
+          selectedInvoiceId: selectedInvoice.id,
+        } satisfies {
+          invoice: InvoiceWithItems | null;
+          invoices: readonly InvoiceListItem[];
+          selectedInvoice: InvoiceListItem | null;
+          selectedInvoiceId: string | null;
+        };
+      }),
+    ),
+  );
+
 export const Route = createFileRoute("/app/$organizationId/invoices/")({
   validateSearch: Schema.toStandardSchemaV1(invoiceSearchSchema),
+  loaderDeps: ({ search: { selectedInvoiceId } }) => ({ selectedInvoiceId }),
+  loader: ({ params: { organizationId }, deps: { selectedInvoiceId } }) =>
+    getLoaderData({ data: { organizationId, selectedInvoiceId } }),
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const { organizationId } = Route.useParams();
   const { selectedInvoiceId } = Route.useSearch();
+  const { invoice, invoices, selectedInvoice } = Route.useLoaderData();
   const isHydrated = useHydrated();
   const navigate = useNavigate({ from: Route.fullPath });
-  const queryClient = useQueryClient();
+  const router = useRouter();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [copiedField, setCopiedField] = React.useState<"json" | null>(null);
+  const [pendingSelectedInvoiceId, setPendingSelectedInvoiceId] = React.useState<string | null>(null);
 
   const setSelectedInvoiceId = React.useCallback(
     (invoiceId: string | undefined) => {
+      setPendingSelectedInvoiceId(null);
       void navigate({ search: (prev) => ({ ...prev, selectedInvoiceId: invoiceId }), replace: true });
     },
     [navigate],
@@ -81,14 +147,15 @@ function RouteComponent() {
     }, 2000);
   }, []);
 
-  const invoicesQuery = useQuery({
-    queryKey: invoicesQueryKey(organizationId),
-    queryFn: () => getInvoices({ data: { organizationId } }),
-  });
-  const invoices = invoicesQuery.data ?? [];
-
-  const selectedInvoice =
-    invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
+  React.useEffect(() => {
+    if (!pendingSelectedInvoiceId || selectedInvoiceId) return;
+    if (!invoices.some((invoice) => invoice.id === pendingSelectedInvoiceId)) return;
+    void navigate({
+      replace: true,
+      search: (prev) => ({ ...prev, selectedInvoiceId: pendingSelectedInvoiceId }),
+    });
+    setPendingSelectedInvoiceId(null);
+  }, [invoices, navigate, pendingSelectedInvoiceId, selectedInvoiceId]);
 
   const { stub } = useOrganizationAgent();
   const uploadMutation = useMutation({
@@ -100,11 +167,11 @@ function RouteComponent() {
     },
     onSuccess: (result) => {
       if (fileInputRef.current) fileInputRef.current.value = "";
-      setSelectedInvoiceId(result.invoiceId);
+      setPendingSelectedInvoiceId(result.invoiceId);
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: invoicesQueryKey(organizationId),
+      void router.invalidate({
+        filter: (match) => match.routeId === Route.id,
       });
     },
   });
@@ -112,15 +179,9 @@ function RouteComponent() {
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
     mutationFn: () => stub.createInvoice(),
     onSuccess: (result) => {
-      setSelectedInvoiceId(result.invoiceId);
       void navigate({
         to: "/app/$organizationId/invoices/$invoiceId",
         params: { organizationId, invoiceId: result.invoiceId },
-      });
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: invoicesQueryKey(organizationId),
       });
     },
   });
@@ -129,25 +190,11 @@ function RouteComponent() {
     mutationFn: ({ invoiceId }: { invoiceId: string }) =>
       stub.softDeleteInvoice({ invoiceId }),
     onSettled: () => {
-      void queryClient.invalidateQueries({
-        queryKey: invoicesQueryKey(organizationId),
+      void router.invalidate({
+        filter: (match) => match.routeId === Route.id,
       });
     },
   });
-
-  const getInvoiceFn = useServerFn(getInvoice);
-  const invoiceQuery = useQuery<InvoiceWithItems | null>({
-    queryKey: [
-      ...invoiceQueryKey(organizationId, selectedInvoice?.id ?? ""),
-      getInvoiceFn,
-    ],
-    queryFn: () =>
-      getInvoiceFn({
-        data: { organizationId, invoiceId: selectedInvoice?.id ?? "" },
-      }),
-    enabled: selectedInvoice !== null && selectedInvoice.status === "ready",
-  });
-  const invoice: InvoiceWithItems | null = invoiceQuery.data ?? null;
   const displayedInvoice: InvoiceWithItems | InvoiceListItem | null =
     selectedInvoice?.status === "ready" ? invoice ?? selectedInvoice : selectedInvoice;
 
@@ -438,13 +485,6 @@ function RouteComponent() {
                       <Separator />
 
                       {(() => {
-                        if (invoiceQuery.isLoading)
-                          return (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                              <Loader2 className="size-4 animate-spin" />
-                              Loading line items...
-                            </div>
-                          );
                         if (invoice && invoice.invoiceItems.length > 0)
                           return (
                             <Table>

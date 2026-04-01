@@ -1,32 +1,28 @@
 # Invoice Index Data Loading Research
 
-## Scope
+## Recommendation
 
-Questions this note answers:
+Move invoice index **reads** to TanStack Start/TanStack Router loaders and `Route.useLoaderData()`. Keep invoice **writes** in `useMutation`.
 
-- Is `/app/$organizationId/invoices/` actually client-only today?
-- Is there a waterfall?
-- Is TanStack Query here mainly because of agent broadcasts?
-- Would loaders be simpler for this page?
-- What is the cleanest simplification path from here?
+Also make `selectedInvoiceId` a strict URL concern with these rules:
 
-## Short Answer
+- no `selectedInvoiceId`: render the index page with **no selection**
+- valid `selectedInvoiceId`: render that selection
+- invalid `selectedInvoiceId`: treat it as an **invalid optional selection**, normalize the URL, and render with **no selection**
 
-The invoice index route is already a hybrid loader-plus-query route, not a pure client-only route.
+Do **not** silently fall back to the first invoice when the URL asks for a different one.
 
-- The parent route `src/routes/app.$organizationId.invoices.tsx` has a loader that prefetches the invoices list into the React Query cache.
-- The child index route `src/routes/app.$organizationId.invoices.index.tsx` reads that prefetched list with `useQuery`.
-- The real client-side fetch is the second query for the selected invoice's full detail payload.
-- `useAgent` and broadcast invalidation are orthogonal to loaders. They do not force you to choose client-only queries. They work well with loader-prefetched query data.
-- Selected invoice is driven by URL search params (`?selectedInvoiceId=...`) via `validateSearch`, not local React state.
+Do **not** turn the whole index route into a 404 for a stale `selectedInvoiceId` search param.
 
-My conclusion: the current list-loading pattern is reasonable and matches TanStack's recommended router-plus-query composition.
+The path route `/app/$organizationId/invoices/$invoiceId` is different: its `invoiceId` is route identity, so missing data there should keep using `notFound()`.
 
-## What The Route Actually Does Today
+## Why Change It
 
-### 1. Parent route loader prefetches the invoices list
+Today the invoices index route mixes two data-loading models.
 
-`src/routes/app.$organizationId.invoices.tsx`:
+Current parent route:
+
+`src/routes/app.$organizationId.invoices.tsx`
 
 ```tsx
 export const Route = createFileRoute("/app/$organizationId/invoices")({
@@ -41,64 +37,16 @@ export const Route = createFileRoute("/app/$organizationId/invoices")({
 });
 ```
 
-So when the user navigates to `/app/$organizationId/invoices/`, the parent loader runs first. On first SSR entry, this can happen on the server. On later SPA navigations, it runs through the router.
+Current index route:
 
-### 2. Router SSR-query integration hydrates that cache
-
-`src/router.tsx`:
-
-```tsx
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-    },
-  },
-});
-
-setupRouterSsrQueryIntegration({ router, queryClient });
-```
-
-The code comment here is important: `staleTime: 30_000` is explicitly there to avoid an immediate post-hydration refetch for data that the loader already fetched.
-
-### 3. The index route consumes the prefetched list with `useQuery`
-
-`src/routes/app.$organizationId.invoices.index.tsx`:
+`src/routes/app.$organizationId.invoices.index.tsx`
 
 ```tsx
 const invoicesQuery = useQuery({
   queryKey: invoicesQueryKey(organizationId),
   queryFn: () => getInvoices({ data: { organizationId } }),
 });
-const invoices = invoicesQuery.data ?? [];
-```
 
-Because the parent loader already seeded this query key, this is not the same as "blank page, then client fetches everything". It is the standard TanStack Router + TanStack Query pattern: loader populates cache, component subscribes to cache.
-
-TanStack's own examples use this exact shape:
-
-```tsx
-export const Route = createFileRoute('/posts')({
-  loader: ({ context: { queryClient } }) =>
-    queryClient.ensureQueryData(postsQueryOptions),
-  component: PostsLayoutComponent,
-})
-
-function PostsLayoutComponent() {
-  const postsQuery = useSuspenseQuery(postsQueryOptions)
-  const posts = postsQuery.data
-}
-```
-
-Source: `refs/tan-start/examples/react/basic-react-query-file-based/src/routes/posts.route.tsx`
-
-## Where The Waterfall Actually Is
-
-The waterfall is not the invoices list. The waterfall is the selected invoice detail query.
-
-`src/routes/app.$organizationId.invoices.index.tsx`:
-
-```tsx
 const selectedInvoice =
   invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
 
@@ -115,143 +63,326 @@ const invoiceQuery = useQuery<InvoiceWithItems | null>({
 });
 ```
 
-This means:
+That creates three problems:
 
-1. loader prefetches invoices list
-2. component renders from prefetched list
-3. selected invoice is derived from that list
-4. if selected invoice is `ready`, a second query fetches full invoice detail and line items
+- read path is split across loader-prefetch, `useQuery` for list, and `useQuery` for detail
+- selection semantics are muddy because the URL can say one invoice while the UI shows `invoices[0]`
+- broadcast refresh is wired to query keys, not route boundaries
 
-That is a real dependent fetch.
-
-It is also a deliberate one: the list query returns a lightweight list item shape, while the second query returns `InvoiceWithItems`.
-
-So your mental model can be simplified to:
-
-- invoices list: loader-prefetched and cache-backed
-- selected detail pane: URL-selected via search params, client-fetched
-
-## Does `enabled` Matter Here?
-
-Yes. TanStack Query's docs say disabled queries:
-
-- do not automatically fetch on mount
-- do not automatically refetch in the background
-- ignore `invalidateQueries` calls
-
-Source: `refs/tan-query/docs/framework/react/guides/disabling-queries.md`
-
-That matters because the selected invoice detail query is only enabled when:
+The current fallback is the biggest conceptual problem:
 
 ```tsx
-enabled: selectedInvoice !== null && selectedInvoice.status === "ready"
+const selectedInvoice =
+  invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
 ```
 
-Implications:
+If `selectedInvoiceId` is absent, that fallback auto-selects the first invoice.
 
-- if the selected invoice is still extracting, the detail query stays off
-- broadcast invalidation will refresh the invoices list query
-- once the list shows that invoice as `ready`, the detail query becomes enabled and fetches the full detail
+If `selectedInvoiceId` is present but invalid, it also auto-selects the first invoice.
 
-This is another reason the page feels a little indirect: some state changes happen by invalidating the list first, and the detail fetch only becomes possible after the list reflects the new status.
+Those are two different states and they should not collapse into the same behavior.
 
-## How `useAgent` Fits
+## TanStack Grounding
 
-### Cloudflare Agents behavior
+TanStack Router's data-loading guide makes the intended model explicit:
 
-Cloudflare's Agents docs describe `useAgent` as:
+`refs/tan-router/docs/router/guide/data-loading.md`
 
-- a React hook with automatic reconnection and state management
-- a websocket-based client
+```md
+Using these dependencies as keys, TanStack Router will cache the data returned
+from a route's `loader` function...
+```
 
-Source excerpt from `refs/agents/docs/client-sdk.md`:
+```md
+To consume data from a `loader`, use the `useLoaderData` hook defined on your
+Route object.
+```
+
+It also explicitly calls out `loaderDeps` for search-param-driven loading:
+
+```md
+loaderDeps: ({ search: { offset, limit } }) => ({ offset, limit })
+```
+
+And:
+
+```md
+Only include dependencies you actually use in the loader.
+```
+
+That matches this invoice case well. `selectedInvoiceId` is already URL state, so the index route can own it through `validateSearch` + `loaderDeps` + `loader` + `Route.useLoaderData()`.
+
+TanStack Start examples also show plain loader data as a normal route pattern:
+
+`refs/tan-start/examples/react/authenticated-routes/src/routes/_auth.invoices.tsx`
+
+```tsx
+export const Route = createFileRoute('/_auth/invoices')({
+  loader: async () => ({
+    invoices: await fetchInvoices(),
+  }),
+  component: InvoicesRoute,
+})
+
+function InvoicesRoute() {
+  const { invoices } = Route.useLoaderData()
+}
+```
+
+For mutations, TanStack Router docs keep the story separate:
+
+`refs/tan-router/docs/router/guide/data-mutations.md`
+
+```md
+When mutations related to loader data are made, we can use `router.invalidate`
+to force the router to reload all of the current route matches
+```
+
+And the Start tutorial uses exactly that pattern:
+
+`refs/tan-router/docs/start/framework/react/tutorial/reading-writing-file.md`
+
+```tsx
+await addJoke({ ... })
+router.invalidate()
+```
+
+That lines up with your desired split:
+
+- loader data for reads
+- `useMutation` for writes
+
+## Why Query Is Not Buying Much Here
+
+TanStack Router's external-data-loading guide recommends loaders when you do use Query:
+
+`refs/tan-router/docs/router/guide/external-data-loading.md`
+
+```md
+The easiest way to integrate external caching/data library into Router is to use
+`route.loader`s to ensure that the data required inside of a route has been loaded
+and is ready to be displayed.
+```
+
+That is a good fit when you want Query's cache semantics on top of route coordination.
+
+But on this page, the current Query usage is mostly compensating for page design choices that can be expressed more directly in the route loader:
+
+- list fetch
+- derive selected row from URL
+- optionally fetch selected invoice detail
+- render loader data
+
+Also, the current detail query relies on `enabled`. TanStack Query docs say:
+
+`refs/tan-query/docs/framework/react/guides/disabling-queries.md`
+
+```md
+When `enabled` is `false`:
+- The query will not automatically fetch on mount.
+- The query will not automatically refetch in the background.
+- The query will ignore query client `invalidateQueries` ... calls
+```
+
+That is part of why the current model feels indirect. If an invoice is selected but not `ready`, the detail query ignores invalidation until the list query updates first and flips the gate.
+
+Moving the read model into the index loader removes that split-brain behavior.
+
+## Recommended Route Shape
+
+Make the parent invoices route structural only.
+
+Keep:
+
+`src/routes/app.$organizationId.invoices.tsx`
+
+```tsx
+export const Route = createFileRoute("/app/$organizationId/invoices")({
+  component: RouteComponent,
+});
+
+function RouteComponent() {
+  return <Outlet />;
+}
+```
+
+Move the index page data ownership into:
+
+- `src/routes/app.$organizationId.invoices.index.tsx`
+
+That route should own:
+
+- `validateSearch`
+- `loaderDeps: ({ search: { selectedInvoiceId } }) => ({ selectedInvoiceId })`
+- the list fetch
+- selected-invoice resolution
+- optional selected-invoice detail fetch
+
+This gives clean invalidation boundaries:
+
+- index route owns index screen data
+- edit route `/app/$organizationId/invoices/$invoiceId` owns edit screen data
+
+That boundary matters for broadcasts.
+
+## Recommended Selection Semantics
+
+Treat `selectedInvoiceId` as **optional view state**, not route identity.
+
+That means:
+
+| URL state | Meaning | Behavior |
+| --- | --- | --- |
+| no `selectedInvoiceId` | no invoice selected | show list + empty detail panel |
+| valid `selectedInvoiceId` | user selected an invoice | show that invoice |
+| invalid `selectedInvoiceId` | stale or invalid optional UI state | normalize URL to no selection |
+
+### Why invalid search should not become `notFound()`
+
+Because the page is still valid.
+
+`/app/$organizationId/invoices` is the resource.
+
+`selectedInvoiceId` is optional state for that resource.
+
+A stale search param should not blow away the entire invoices workspace.
+
+### Why invalid search should not fall back to the first invoice
+
+Because that makes the URL lie.
+
+If the URL says `selectedInvoiceId=abc` and the UI shows invoice `xyz`, the URL is no longer the source of truth.
+
+### Recommended normalization rule
+
+If `selectedInvoiceId` is present but does not match an invoice in the list, redirect to the same route with `selectedInvoiceId` removed.
+
+That is the same general pattern already used elsewhere in this repo for invalid search state:
+
+`src/routes/admin.users.tsx`
+
+```tsx
+if (deps.page > result.pageCount) {
+  throw redirect({
+    to: "/admin/users",
+    search: { page: result.pageCount, filter: deps.filter },
+  });
+}
+```
+
+Use the same idea here:
+
+- invalid optional search input gets canonicalized
+- canonical URL matches rendered state
+
+## Suggested Loader Shape
+
+Sketch:
+
+```tsx
+export const Route = createFileRoute("/app/$organizationId/invoices/")({
+  validateSearch: Schema.toStandardSchemaV1(invoiceSearchSchema),
+  loaderDeps: ({ search: { selectedInvoiceId } }) => ({ selectedInvoiceId }),
+  loader: async ({ params: { organizationId }, deps: { selectedInvoiceId } }) => {
+    const invoices = await getInvoices({ data: { organizationId } });
+
+    if (!selectedInvoiceId) {
+      return {
+        invoices,
+        selectedInvoiceId: null,
+        selectedInvoice: null,
+        invoice: null,
+      };
+    }
+
+    const selectedInvoice =
+      invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null;
+
+    if (!selectedInvoice) {
+      throw redirect({
+        to: "/app/$organizationId/invoices",
+        params: { organizationId },
+        search: {},
+      });
+    }
+
+    const invoice =
+      selectedInvoice.status === "ready"
+        ? await getInvoice({ data: { organizationId, invoiceId: selectedInvoice.id } })
+        : null;
+
+    return {
+      invoices,
+      selectedInvoiceId: selectedInvoice.id,
+      selectedInvoice,
+      invoice,
+    };
+  },
+  component: RouteComponent,
+});
+```
+
+Important detail: if no selection is present, do not fetch detail.
+
+That is both simpler and cheaper.
+
+## Waterfall Discussion
+
+There is still a dependency here:
+
+1. load invoices list
+2. resolve whether `selectedInvoiceId` exists and what its status is
+3. maybe load full selected invoice detail
+
+That dependency does **not** disappear.
+
+But it moves from a client-side component/query relationship into the route loader.
+
+That is a good trade here:
+
+- first render comes from loader data
+- the component does not coordinate data fetching itself
+- selection logic lives in one place
+
+## Broadcast / Agent Invalidation
+
+Cloudflare Agents docs describe `useAgent` as:
+
+`refs/agents/docs/client-sdk.md`
 
 ```md
 | `useAgent`    | React hook with automatic reconnection and state management |
 ```
 
-Cloudflare's docs and prompts also show the intended client API shape:
+and:
 
-```tsx
-const connection = useAgent({
-  agent: "dialogue-agent",
-  name: "insight-seeker",
-  onMessage: (message) => {
-    console.log("Understanding received:", message.data);
-  },
-});
+```md
+- Auto-reconnection - Built on PartySocket for reliable connections
 ```
 
-Source: `refs/cloudflare-docs/src/content/partials/prompts/base-prompt.txt`
+Broadcasting is standard WebSocket fan-out:
 
-### Agent routing and instance naming
-
-The agents docs say agent URLs look like:
-
-```txt
-/agents/{agent-name}/{instance-name}
-```
-
-and `useAgent({ agent: "Counter" })` resolves to `/agents/counter/...`.
-
-Source: `refs/agents/docs/routing.md`
-
-That lines up with the local code:
-
-```tsx
-const agent = useAgent<OrganizationAgent, OrganizationAgentState>({
-  agent: "organization-agent",
-  name: organizationId,
-  onMessage: (event) => {
-    ...
-  },
-});
-```
-
-Source: `src/routes/app.$organizationId.tsx`
-
-So each organization page connects to the `organization-agent` instance for that `organizationId`.
-
-## What The Agent Broadcasts Actually Contain
-
-The agent is not broadcasting invoice records. It is broadcasting small activity messages.
-
-`src/organization-agent.ts`:
-
-```tsx
-agent.broadcast(
-  JSON.stringify({
-    createdAt: new Date().toISOString(),
-    action: input.action,
-    level: input.level,
-    text: input.text,
-  } satisfies ActivityMessage),
-);
-```
-
-Examples of actions emitted locally:
-
-- `invoice.uploaded`
-- `invoice.created`
-- `invoice.deleted`
-- `invoice.extraction.completed`
-- `invoice.extraction.failed`
-
-So the websocket is acting as a notification channel, not as the primary data transport for invoice entities.
-
-The Agents docs describe `broadcast` the same way:
+`refs/agents/docs/http-websockets.md`
 
 ```tsx
 this.broadcast(JSON.stringify({ type: "update", data: "..." }));
 ```
 
-Source: `refs/agents/docs/http-websockets.md`
+Routing is instance-based:
 
-## How Broadcasts Affect React Query
+`refs/agents/docs/routing.md`
 
-The organization layout route receives those messages and turns them into query invalidations.
+```txt
+/agents/{agent-name}/{instance-name}
+```
 
-`src/routes/app.$organizationId.tsx`:
+So the current organization-level `useAgent({ agent: "organization-agent", name: organizationId })` placement is correct and should stay.
+
+What should change is the invalidation target.
+
+Today the layout invalidates Query keys:
+
+`src/routes/app.$organizationId.tsx`
 
 ```tsx
 if (shouldInvalidateForInvoice(message.action)) {
@@ -264,525 +395,78 @@ if (shouldInvalidateForInvoice(message.action)) {
 }
 ```
 
-The invalidating actions are defined in `src/lib/Activity.ts`.
+For a loader-data index route, switch that policy to route invalidation.
 
-TanStack Query's docs say invalidation does two things:
+TanStack Router supports route-filtered invalidation in its router type:
 
-1. mark matching queries stale
-2. refetch active matching queries in the background
+`refs/tan-router/packages/router-core/src/router.ts`
 
-Source excerpt from `refs/tan-query/docs/framework/react/guides/query-invalidation.md`:
-
-```md
-When a query is invalidated with `invalidateQueries`, two things happen:
-
-- It is marked as stale.
-- If the query is currently being rendered via `useQuery` or related hooks,
-  it will also be refetched in the background.
+```ts
+export type InvalidateFn<TRouter extends AnyRouter> = (opts?: {
+  filter?: (d: MakeRouteMatchUnion<TRouter>) => boolean
+  sync?: boolean
+  forcePending?: boolean
+}) => Promise<void>
 ```
 
-This is the main reason query-backed screens fit nicely with the websocket notifications.
+Recommended policy:
 
-## Important Distinction: Query Invalidation vs Loader Invalidation
+- keep `useAgent` in `src/routes/app.$organizationId.tsx`
+- on invoice broadcast messages, invalidate the **invoice index route match**
+- do **not** automatically invalidate the edit route on generic invoice broadcasts
 
-This codebase uses both invalidation systems.
+Why not invalidate the edit route?
 
-### Query invalidation
+- it is a form screen
+- loader invalidation would risk resetting in-progress edits
+- the edit route already has its own mutation-driven `router.invalidate()` after save
 
-Used by the invoice list page via `queryClient.invalidateQueries(...)`.
+That gives a cleaner split:
 
-### Router invalidation
+- index route: live-updating workspace
+- edit route: stable editor, explicit refresh after save
 
-Used by loader-data pages via `router.invalidate()`.
+## Mutation Policy
 
-Example: the invoice edit route is loader-driven, not query-driven:
+Keep `useMutation`.
 
-```tsx
-export const Route = createFileRoute("/app/$organizationId/invoices/$invoiceId")({
-  loader: ({ params }) => getLoaderData({ data: params }),
-  component: RouteComponent,
-});
+That part already fits TanStack's model well.
 
-const saveMutation = useMutation({
-  mutationFn: (data) => stub.updateInvoice({ invoiceId, ...data }),
-  onSuccess: () => {
-    void router.invalidate();
-  },
-});
-```
+The change is only what happens after success:
 
-Source: `src/routes/app.$organizationId.invoices.$invoiceId.tsx`
+- local create/upload/delete on the index route should invalidate the index route loader or navigate to a new canonical URL
+- edit/save on `/app/$organizationId/invoices/$invoiceId` should keep using `router.invalidate()` on success
 
-This distinction matters for any future simplification:
-
-- if a screen renders from query cache, agent broadcasts can refresh it via `invalidateQueries`
-- if a screen renders from `Route.useLoaderData()`, agent broadcasts will not refresh it unless you also call `router.invalidate()` somewhere
-
-So moving the invoice index page to a pure loader-data model is possible, but it changes the live-update wiring.
-
-## Is TanStack Query Here Mainly Because Of Broadcasts?
-
-Partly, but not entirely.
-
-There are three separate reasons Query is useful here:
-
-1. loader-prefetched SSR hydration for the list
-2. client-side refetch/invalidation in response to websocket notifications
-3. client-driven fetching for whichever invoice row is currently selected
-
-The third item is the biggest reason the index route still has a second query. The selected invoice is controlled by URL search params via `validateSearch`, so selection changes are URL navigations that the router tracks.
-
-## About "New Invoice Should Be Simple Request/Response"
-
-For the initiating client, it already mostly is.
-
-`createInvoiceMutation` calls:
-
-```tsx
-mutationFn: () => stub.createInvoice(),
-onSuccess: (result) => {
-  setSelectedInvoiceId(result.invoiceId);
-  void navigate({
-    to: "/app/$organizationId/invoices/$invoiceId",
-    params: { organizationId, invoiceId: result.invoiceId },
-  });
-},
-```
-
-So the client gets an immediate response containing `invoiceId`, then navigates.
-
-The broadcast is still useful for:
-
-- other connected tabs
-- other connected users viewing the same organization
-- general activity feed updates
-
-That said, there is some duplicate same-tab freshness work today:
-
-- mutation `onSettled` invalidates the invoices list locally
-- the agent also broadcasts an event that triggers more invalidation
-
-For `createInvoice`, that duplication is mostly about convenience and cross-client sync, not necessity for the initiating client.
-
-## Recommendation
-
-### What I would keep
-
-The parent invoices route loader as a loader-plus-query-cache prefetch. It is a good pattern here.
-
-- SSR-friendly first render for the invoices list
-- matches TanStack's documented examples
-- composes cleanly with broadcast-driven query invalidation
-- keeps the list fresh without forcing everything through `Route.useLoaderData()`
-
-### Current state: selection is URL-driven
-
-Selected invoice is driven by URL search params (`?selectedInvoiceId=...`) via `validateSearch` on the index route. Row clicks update the URL with `replace: true`. If no `selectedInvoiceId` is in the URL, the component falls back to the first invoice in the list.
-
-This means loaders can now follow selection via `loaderDeps` if we move to a loader-first model.
-
-### Simplest next step if you want less complexity overall
-
-Reduce how much detail the index page shows.
-
-The full detail pane is what creates the second query. If the index page became a list plus lightweight summary, and full detail lived only on `/app/$organizationId/invoices/$invoiceId`, the mental model gets simpler.
-
-## Comparison: Without Query
-
-This section sketches the same page shape without TanStack Query.
-
-Selection already lives in the URL. The remaining question is whether the page should also drop Query in favor of pure loader data.
-
-Goal:
-
-- loader owns all data fetching
-- component renders only `Route.useLoaderData()`
-- websocket messages trigger `router.invalidate()` instead of `queryClient.invalidateQueries()`
-
-One important structural rule in this version:
-
-- the parent invoices route stays structural only
-- the index route owns index-page data
-- the detail form route owns form-page data
-
-That split is what makes selective route invalidation possible.
-
-### Route shape
-
-The cleanest no-query version is still a parent invoices layout plus an index child route, but the parent must not own shared invoice data.
-
-The parent route can stay simple:
-
-```tsx
-export const Route = createFileRoute("/app/$organizationId/invoices")({
-  component: RouteComponent,
-});
-
-function RouteComponent() {
-  return <Outlet />;
-}
-```
-
-That parent should stay structural. Do not put the invoices list loader there.
-
-If the parent loader owned the invoices list, then invalidating invoice-list data would also affect the form route, because the parent match is active for both `/app/$organizationId/invoices/` and `/app/$organizationId/invoices/$invoiceId`.
-
-The index route would own the selected invoice via search params:
-
-```tsx
-const InvoicesSearchSchema = z.object({
-  selectedInvoiceId: z.string().optional(),
-});
-
-export const Route = createFileRoute("/app/$organizationId/invoices/")({
-  validateSearch: InvoicesSearchSchema,
-  loaderDeps: ({ search }) => ({ selectedInvoiceId: search.selectedInvoiceId }),
-  loader: ({ params, deps }) =>
-    getInvoicesPageData({
-      data: {
-        organizationId: params.organizationId,
-        selectedInvoiceId: deps.selectedInvoiceId,
-      },
-    }),
-  component: RouteComponent,
-});
-```
-
-Selection is already in URL search params. The shift here is that the loader also uses it via `loaderDeps`.
-
-### Loader shape
-
-The loader would fetch both pieces of data directly and return them.
-
-Possible shape:
-
-```tsx
-const getInvoicesPageData = createServerFn({ method: "GET" })
-  .inputValidator(
-    Schema.toStandardSchemaV1(
-      Schema.Struct({
-        organizationId: Schema.NonEmptyString,
-        selectedInvoiceId: Schema.optional(Schema.NonEmptyString),
-      }),
-    ),
-  )
-  .handler(({ context: { runEffect }, data: { organizationId, selectedInvoiceId } }) =>
-    runEffect(
-      Effect.gen(function* () {
-        const invoices = yield* getInvoices({ data: { organizationId } });
-        const selectedInvoice =
-          invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? invoices[0] ?? null;
-
-        const invoice =
-          selectedInvoice && selectedInvoice.status === "ready"
-            ? yield* getInvoice({
-                data: { organizationId, invoiceId: selectedInvoice.id },
-              })
-            : null;
-
-        return {
-          invoices,
-          selectedInvoiceId: selectedInvoice?.id ?? null,
-          selectedInvoice,
-          invoice,
-        };
-      }),
-    ),
-  );
-```
-
-Then the component becomes much more loader-shaped:
-
-```tsx
-function RouteComponent() {
-  const { organizationId } = Route.useParams();
-  const search = Route.useSearch();
-  const navigate = useNavigate();
-  const { invoices, selectedInvoiceId, selectedInvoice, invoice } = Route.useLoaderData();
-
-  return invoices.map((item) => (
-    <TableRow
-      key={item.id}
-      data-state={selectedInvoiceId === item.id ? "selected" : undefined}
-      onClick={() => {
-        void navigate({
-          to: "/app/$organizationId/invoices",
-          params: { organizationId },
-          search: { ...search, selectedInvoiceId: item.id },
-          replace: true,
-        });
-      }}
-    />
-  ));
-}
-```
-
-### Canonical URL question
-
-There is one subtle issue in the pure-loader version.
-
-If the URL does not have `selectedInvoiceId`, but invoices exist, the loader still needs to choose one. You then have two options.
-
-Option 1:
-
-- loader returns `selectedInvoiceId` in loader data
-- URL remains without `selectedInvoiceId`
-- component renders correctly, but URL is not canonical
-
-Option 2:
-
-- loader or component normalizes the URL to include `selectedInvoiceId`
-- URL always reflects the actual selected row
-
-I think option 2 is better. It keeps the URL as the single source of truth.
-
-### Mutation behavior without Query
-
-Without Query, mutations become more obviously request/response plus route refresh.
-
-Examples:
-
-```tsx
-const createInvoiceMutation = useMutation({
-  mutationFn: () => stub.createInvoice(),
-  onSuccess: ({ invoiceId }) => {
-    void navigate({
-      to: "/app/$organizationId/invoices",
-      params: { organizationId },
-      search: { selectedInvoiceId: invoiceId },
-    });
-  },
-});
-```
-
-```tsx
-const softDeleteInvoiceMutation = useMutation({
-  mutationFn: ({ invoiceId }: { invoiceId: string }) => stub.softDeleteInvoice({ invoiceId }),
-  onSuccess: () => {
-    void router.invalidate({
-      filter: (match) => match.routeId === "/app/$organizationId/invoices/",
-    });
-  },
-});
-```
-
-That is conceptually simpler than query invalidation.
-
-You mutate, then you re-run the route loader.
-
-### How live updates would work without Query
-
-This is the part where route ownership matters.
-
-In a pure-loader design, the websocket message handler in the layout would invalidate only the index route match, not the form route match.
-
-That is possible because `router.invalidate()` supports a `filter`, and route matches expose `routeId`.
-
-Sketch:
-
-```tsx
-const router = useRouter();
-
-onMessage: (event) => {
-  const message = decodeActivityMessage(event);
-  if (!message) return;
-  if (shouldInvalidateForInvoice(message.action)) {
-    void router.invalidate({
-      filter: (match) => match.routeId === "/app/$organizationId/invoices/",
-    });
-  }
-};
-```
-
-What this gives you:
-
-- when the user is on the index route, the index loader re-runs
-- when the user is on the form route, the form loader does not re-run
-- the index route match is marked stale/invalid, so when the user later returns to the index route it reloads
-
-So this addresses the main concern with the no-query version: extraction messages can refresh the index route without interrupting an in-progress edit form.
-
-The tradeoff versus Query is still:
-
-- Query version: invalidate only invoice query keys, active observers refetch in background
-- Loader version: invalidate only selected route matches, based on route boundaries
-
-That makes the loader version viable, but only at route granularity. It is not as fine-grained as query-key invalidation.
-
-### Strengths of the no-query version
-
-- simpler mental model
-- URL is the source of truth for selection
-- no list query plus detail query split in the component body
-- request/response mutations fit naturally with `router.invalidate()`
-
-### Weaknesses of the no-query version
-
-- live updates are coarser because they refresh via loader invalidation, not targeted query invalidation
-- you lose the nice cache subscription model TanStack recommends for Router + Query
-- the selected invoice detail still depends on the selected invoice id, so the waterfall is reduced structurally but not magically removed
-- repeated quick row switches become route navigations and loader reruns rather than local cache reads
-- selective invalidation depends on route boundaries being designed carefully
-
-### My take on this comparison
-
-If your top priority is conceptual clarity, this pure-loader version is a valid design.
-
-If your top priority is responsive live-updating with granular invalidation, the current loader-plus-query version is stronger.
-
-The biggest benefit of the no-query version is not performance. It is that the data flow becomes easier to explain:
-
-- URL picks selected invoice
-- loader fetches list and selected detail
-- component renders loader data
-- websocket causes loader invalidation
-
-## `useAgent` Placement
-
-Keep `useAgent` in the organization layout at `src/routes/app.$organizationId.tsx`.
-
-That gives one stable websocket connection for the whole organization area and avoids disconnect/reconnect churn when navigating between the invoices index route and the invoice form route.
-
-In this approach, the layout owns websocket subscription and route invalidation policy, while the leaf invoice routes own their own loader data.
-
-## SSR Hydration Options
-
-If the main complaint with the current Query approach is the positive `staleTime` used to avoid immediate hydration refetch, there are really three distinct options.
-
-### Option 1: Query Prefetch + Hydration
-
-This is the current pattern.
-
-Shape:
-
-- loader calls `ensureQueryData` or `prefetchQuery`
-- Query cache is hydrated across SSR
-- component reads via `useQuery` or `useSuspenseQuery`
-- hydration refetch is controlled by Query freshness settings
-
-What TanStack docs say:
-
-- with SSR, a default `staleTime` above `0` is usually desired to avoid immediate client refetch
-- when server prefetching, a positive `staleTime` is the standard way to avoid re-specifying that everywhere
-
-This is the most supported TanStack Query SSR path.
-
-Pros:
-
-- best fit with query invalidation and background refetching
-- best fit with broadcast-driven live updates
-- avoids `initialData` caveats around cache overwrites
-- matches the recommended Query hydration model
-
-Cons:
-
-- requires a freshness policy to avoid hydration refetch
-- if that `staleTime` has no domain meaning, it can feel semantically muddy
-- combines Router cache coordination with Query cache semantics, which is conceptually heavier
-
-### Option 2: Loader Data + `initialDataUpdatedAt`
-
-This keeps Query in the component, but stops using Query hydration as the transport for SSR data.
-
-Shape:
-
-- loader fetches raw data and returns it directly
-- component passes loader data into `useQuery` as `initialData`
-- component also passes `initialDataUpdatedAt`
-- component can use `refetchOnMount: false` if the goal is to suppress hydration refetch without declaring a fake freshness window
-
-Sketch:
-
-```tsx
-const { invoices, fetchedAt } = Route.useLoaderData();
-
-const invoicesQuery = useQuery({
-  queryKey: invoicesQueryKey(organizationId),
-  queryFn: () => getInvoices({ data: { organizationId } }),
-  initialData: invoices,
-  initialDataUpdatedAt: fetchedAt,
-  refetchOnMount: false,
-});
-```
-
-Important nuance:
-
-- `initialDataUpdatedAt` does not replace `staleTime`
-- it only tells Query how old the initial data is
-- with `staleTime: 0`, the query is still stale immediately
-- the thing that actually stops the hydration refetch in this version is `refetchOnMount: false`
-
-Pros:
-
-- more honest mental model if you dislike pretending data is fresh for an arbitrary number of milliseconds
-- loader remains the SSR source of truth
-- component still gets Query cache, invalidation, and refetch tools after mount
-
-Cons:
-
-- weaker than hydration when the same query is used in multiple places
-- `initialData` never overwrites existing cache data, even if the new loader data is fresher
-- more brittle than full hydration on revisits and shared query usage
-- still uses Query, but now with a hybrid loader-data-to-query bridge
-
-### Option 3: Pure Loader Data
-
-This is the no-Query version sketched above.
-
-Shape:
-
-- loader fetches route data
-- component renders `Route.useLoaderData()` only
-- websocket messages selectively call `router.invalidate({ filter })`
-- no query hydration semantics at all for this page
-
-Pros:
-
-- simplest mental model
-- no hydration freshness knob needed
-- route invalidation policy is explicit and route-scoped
-
-Cons:
-
-- gives up query-key invalidation and background refetch behavior
-- repeated route state changes rerun loaders rather than reuse query cache subscriptions
-- less flexible if the same data is consumed across several components or screens
-
-### My Take On The Three Options
-
-If the main priority is to stay aligned with TanStack Query's strongest path, option 1 is still the most supported design.
-
-If the main priority is to avoid the feeling of a fake freshness window while still keeping Query available after mount, option 2 is the most interesting compromise.
-
-If the main priority is conceptual clarity and route-driven data flow, option 3 is the cleanest.
-
-The real trade is not just "staleTime or no staleTime". The real trade is:
-
-- Query hydration semantics
-- loader-to-query bridging semantics
-- pure route-loader semantics
+You do not need TanStack Query in the index component just to keep `useMutation`.
 
 ## Final Take
 
-Your concern is real, but the exact problem is slightly different than it first appears.
+The clean model is:
 
-The current page is not:
+- invoice index reads: loader + `Route.useLoaderData()`
+- invoice mutations: `useMutation`
+- `selectedInvoiceId`: optional search state, not route identity
+- missing `selectedInvoiceId`: no selection
+- invalid `selectedInvoiceId`: normalize URL to no selection
+- edit route `invoiceId`: real route identity, keep `notFound()` when missing
+- organization agent broadcasts: invalidate the invoice index route, not generic query keys
 
-- no loader
-- blank SSR
-- everything fetched after hydration
+That model is simpler than the current hybrid page and matches your desired direction better.
 
-It is:
+## Sources
 
-- loader-prefetched invoices list
-- query-backed cache subscription for that list
-- URL-driven selection via search params
-- client-fetched detail query for the selected invoice
-- websocket notifications that invalidate query-backed data
-
-So the clean framing is:
-
-- list loading is in a good loader-based place
-- selected detail loading is where the waterfall lives
-- `useAgent` does not block loader usage
-- the remaining decision is Query vs pure loader for this page's data flow
+- `src/routes/app.$organizationId.invoices.tsx`
+- `src/routes/app.$organizationId.invoices.index.tsx`
+- `src/routes/app.$organizationId.invoices.$invoiceId.tsx`
+- `src/routes/app.$organizationId.tsx`
+- `src/routes/admin.users.tsx`
+- `refs/tan-router/docs/router/guide/data-loading.md`
+- `refs/tan-router/docs/router/guide/data-mutations.md`
+- `refs/tan-router/docs/router/guide/external-data-loading.md`
+- `refs/tan-router/docs/start/framework/react/tutorial/reading-writing-file.md`
+- `refs/tan-start/examples/react/authenticated-routes/src/routes/_auth.invoices.tsx`
+- `refs/tan-query/docs/framework/react/guides/disabling-queries.md`
+- `refs/agents/docs/client-sdk.md`
+- `refs/agents/docs/http-websockets.md`
+- `refs/agents/docs/routing.md`
+- `refs/tan-router/packages/router-core/src/router.ts`
