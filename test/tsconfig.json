@@ -6,6 +6,7 @@
     "types": [
       "vitest",
       "node",
+      "@cloudflare/vitest-pool-workers",
       "@cloudflare/vitest-pool-workers/types",
       "@playwright/test"
     ],
