@@ -1,16 +1,10 @@
-import { createServerFn } from "@tanstack/react-start";
+import type * as OrganizationDomain from "@/lib/OrganizationDomain";
+
 import { Cause, Config, Effect, Redacted } from "effect";
-import * as Schema from "effect/Schema";
 
 import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
-import type * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { Request as AppRequest } from "@/lib/Request";
-
-const InvoiceParamsSchema = Schema.Struct({
-  organizationId: Schema.NonEmptyString,
-  invoiceId: Schema.NonEmptyString,
-});
 
 export const getOrganizationAgentStub = (organizationId: string) =>
   Effect.gen(function* () {
@@ -44,8 +38,7 @@ export const getInvoicesEffect = Effect.fn("getInvoicesEffect")(function* (
   }
   const r2BucketName = yield* Config.nonEmptyString("R2_BUCKET_NAME");
   const r2S3AccessKeyId = yield* Config.redacted("R2_S3_ACCESS_KEY_ID");
-  const r2S3SecretAccessKey =
-    yield* Config.redacted("R2_S3_SECRET_ACCESS_KEY");
+  const r2S3SecretAccessKey = yield* Config.redacted("R2_S3_SECRET_ACCESS_KEY");
   const cfAccountId = yield* Config.nonEmptyString("CF_ACCOUNT_ID");
   const { AwsClient } = yield* Effect.tryPromise(() => import("aws4fetch"));
   const client = new AwsClient({
@@ -67,7 +60,10 @@ export const getInvoicesEffect = Effect.fn("getInvoicesEffect")(function* (
             );
             return { ...invoice, viewUrl: signed.url as string | undefined };
           })
-        : Effect.succeed({ ...invoice, viewUrl: undefined as string | undefined }),
+        : Effect.succeed({
+            ...invoice,
+            viewUrl: undefined as string | undefined,
+          }),
     ),
     { concurrency: 10 },
   );
@@ -78,17 +74,10 @@ export const getInvoiceEffect = Effect.fn("getInvoiceEffect")(function* (
   invoiceId: string,
 ) {
   const stub = yield* getOrganizationAgentStub(organizationId);
-  const invoice: OrganizationDomain.InvoiceWithItems | null = yield* Effect.tryPromise(
-    () => stub.getInvoice({ invoiceId }),
-  );
+  const invoice: OrganizationDomain.InvoiceWithItems | null =
+    yield* Effect.tryPromise(() => stub.getInvoice({ invoiceId }));
   return invoice ? structuredClone(invoice) : null;
 });
-
-export const getInvoice = createServerFn({ method: "GET" })
-  .inputValidator(Schema.toStandardSchemaV1(InvoiceParamsSchema))
-  .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
-    runEffect(getInvoiceEffect(organizationId, invoiceId)),
-  );
 
 export const getInvoiceViewUrl = (
   organizationId: string,
@@ -101,7 +90,9 @@ export const getInvoiceViewUrl = (
       return `/api/org/${organizationId}/invoice/${encodeURIComponent(invoice.id)}`;
     const r2BucketName = yield* Config.nonEmptyString("R2_BUCKET_NAME");
     const r2S3AccessKeyId = yield* Config.redacted("R2_S3_ACCESS_KEY_ID");
-    const r2S3SecretAccessKey = yield* Config.redacted("R2_S3_SECRET_ACCESS_KEY");
+    const r2S3SecretAccessKey = yield* Config.redacted(
+      "R2_S3_SECRET_ACCESS_KEY",
+    );
     const cfAccountId = yield* Config.nonEmptyString("CF_ACCOUNT_ID");
     const { AwsClient } = yield* Effect.tryPromise(() => import("aws4fetch"));
     const client = new AwsClient({
