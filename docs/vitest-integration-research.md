@@ -10,6 +10,8 @@ Vitest is integrated here as a Cloudflare Worker test harness around the real ap
 - root `vitest.config.ts` re-exports `test/integration/vitest.config`
 - the Worker under test comes from `wrangler.jsonc`, which points at `src/worker.ts`
 - integration tests call the Worker through `cloudflare:workers`
+- integration tests also call TanStack server functions through `createClientRpc()`
+- `test/integration/vitest.config.ts` seeds `TSS_SERVER_FN_BASE` for the test runtime
 - D1 migrations are loaded into Miniflare and applied in `test/apply-migrations.ts`
 
 ## Entry Points
@@ -52,6 +54,8 @@ import viteReact from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+process.env.TSS_SERVER_FN_BASE ??= "/_serverFn/";
+
 export default defineConfig(async () => {
   const rootDir = path.resolve(import.meta.dirname, "../..");
   const migrations = await readD1Migrations(path.join(rootDir, "migrations"));
@@ -81,7 +85,18 @@ export default defineConfig(async () => {
         "@": path.join(rootDir, "src"),
       },
     },
+    define: {
+      "process.env.TSS_SERVER_FN_BASE": JSON.stringify(
+        process.env.TSS_SERVER_FN_BASE,
+      ),
+      "import.meta.env.TSS_SERVER_FN_BASE": JSON.stringify(
+        process.env.TSS_SERVER_FN_BASE,
+      ),
+    },
     test: {
+      env: {
+        TSS_SERVER_FN_BASE: process.env.TSS_SERVER_FN_BASE,
+      },
       include: ["test/integration/*.test.ts"],
       setupFiles: ["test/apply-migrations.ts"],
       testTimeout: 30000,
@@ -99,6 +114,30 @@ Current responsibilities of this config:
 - `root` is pinned to the repo root, not `test/integration`
 - `tanstackStart()`, `viteReact()`, and `tsconfigPaths()` make the test Vite runtime match the app's Vite runtime closely enough for TanStack Start SSR modules to resolve
 - the explicit `@` alias matches the main app config
+- `define` and `test.env` seed `TSS_SERVER_FN_BASE` for direct server-fn RPC tests
+
+## Server Function Base In Tests
+
+The current test-only `TSS_SERVER_FN_BASE` wiring exists because the integration
+suite calls TanStack client RPC code directly.
+
+TanStack builds the RPC URL from `process.env.TSS_SERVER_FN_BASE`:
+
+```ts
+// refs/tan-start/packages/start-client-core/src/client-rpc/createClientRpc.ts
+export function createClientRpc(functionId: string) {
+  const url = process.env.TSS_SERVER_FN_BASE + functionId
+```
+
+The active integration smoke test does exactly that:
+
+```ts
+// test/integration/smoke.test.ts
+const loginClientRpc = createClientRpc(loginServerFn.serverFnMeta.id);
+```
+
+Without the Vitest config override, that URL becomes `undefined...` in the test
+runtime. So the current fix is intentionally test-local, not worker-local.
 
 ## Worker Under Test
 
@@ -113,6 +152,8 @@ Current responsibilities of this config:
 `src/worker.ts` exports the Worker module Vitest exercises:
 
 ```ts
+import serverEntry from "@tanstack/react-start/server-entry";
+
 export default {
   async fetch(request, env, _ctx) {
     const url = new URL(request.url);
@@ -288,7 +329,9 @@ So the working conclusion here is:
 
 ## Test Invocation Pattern
 
-The current route-level smoke test calls the Worker through `cloudflare:workers`:
+The current smoke test covers both Worker fetches and server-fn RPC calls.
+
+It calls the Worker through `cloudflare:workers`:
 
 `test/integration/smoke.test.ts`
 
@@ -305,10 +348,21 @@ describe("integration smoke", () => {
 });
 ```
 
-This is the core test shape for the current integration:
+It also calls a TanStack server function through the real Worker:
+
+```ts
+import { createClientRpc } from "@tanstack/react-start/client-rpc";
+
+const loginClientRpc = createClientRpc(loginServerFn.serverFnMeta.id);
+const fetchServerFn = (url: string, init?: RequestInit) =>
+  exports.default.fetch(new Request(new URL(url, "http://example.com"), init));
+```
+
+So the core test shapes are:
 
 - import the Worker module from `cloudflare:workers`
 - call `exports.default.fetch()` with an app URL
+- optionally route TanStack client RPC requests back through `exports.default.fetch()`
 - assert on the full Worker response
 
 ## Current Suite Shape
@@ -316,17 +370,7 @@ This is the core test shape for the current integration:
 Current integration tests under `test/integration/`:
 
 - `smoke.test.ts` exercises `/login` through `exports.default.fetch()`
-- `auth.test.ts` is present but wrapped in `describe.skip(...)`
-
-`auth.test.ts` still uses `cloudflare:test` imports:
-
-```ts
-import { env, SELF } from "cloudflare:test";
-
-describe.skip("auth (integration)", () => {
-```
-
-So today the active, non-skipped integration coverage is the smoke-style Worker fetch path.
+- `smoke.test.ts` also exercises the `login` server fn through `createClientRpc()` routed back into `exports.default.fetch()`
 
 ## Bottom Line
 
@@ -335,8 +379,9 @@ Vitest is integrated here as a Worker-first integration setup:
 - the real Worker comes from `wrangler.jsonc` -> `src/worker.ts`
 - Vitest runs through `@cloudflare/vitest-pool-workers`
 - the test Vite config includes the TanStack Start and React plugins the app depends on
+- the test Vite config also seeds `TSS_SERVER_FN_BASE` so direct server-fn RPC tests work without patching `src/worker.ts`
 - D1 migrations are injected into Miniflare and applied in a setup file
-- tests exercise the Worker by calling `exports.default.fetch()`
+- tests exercise the Worker by calling `exports.default.fetch()` and by routing TanStack client RPC requests through that same Worker
 - `ProvidedEnv` is not currently the effective source of truth for `env` typing here; `Cloudflare.Env` is
 
 That is the current integration model in this repo.
