@@ -1,4 +1,7 @@
+import type * as OrganizationDomain from "@/lib/OrganizationDomain";
+
 import * as React from "react";
+
 import { useMutation } from "@tanstack/react-query";
 import {
   Link,
@@ -11,7 +14,16 @@ import {
 import { createServerFn } from "@tanstack/react-start";
 import { Effect } from "effect";
 import * as Schema from "effect/Schema";
-import { AlertCircle, Copy, FilePenLine, FileText, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import {
+  AlertCircle,
+  Copy,
+  FilePenLine,
+  FileText,
+  Loader2,
+  Plus,
+  Trash2,
+  Upload,
+} from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -33,11 +45,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  getInvoiceEffect,
-  getInvoicesEffect,
-} from "@/lib/Invoices";
-import type * as OrganizationDomain from "@/lib/OrganizationDomain";
+import { getInvoice, getInvoices } from "@/lib/Invoices";
 import { useOrganizationAgent } from "@/lib/OrganizationAgentContext";
 
 const getStatusVariant = (
@@ -61,54 +69,56 @@ const getLoaderData = createServerFn({ method: "GET" })
       }),
     ),
   )
-  .handler(({ context: { runEffect }, data: { organizationId, selectedInvoiceId } }) =>
-    runEffect(
-      Effect.gen(function* () {
-        const invoices: readonly OrganizationDomain.Invoice[] = yield* getInvoicesEffect(organizationId);
+  .handler(
+    ({ context: { runEffect }, data: { organizationId, selectedInvoiceId } }) =>
+      runEffect(
+        Effect.gen(function* () {
+          const invoices = yield* getInvoices(organizationId);
 
-        if (!selectedInvoiceId)
+          if (!selectedInvoiceId)
+            return {
+              invoice: null,
+              invoices,
+              selectedInvoice: null,
+              selectedInvoiceId: null,
+            } satisfies {
+              invoice: OrganizationDomain.InvoiceWithItems | null;
+              invoices: readonly OrganizationDomain.Invoice[];
+              selectedInvoice: OrganizationDomain.Invoice | null;
+              selectedInvoiceId: string | null;
+            };
+
+          const selectedInvoice =
+            invoices.find((invoice) => invoice.id === selectedInvoiceId) ??
+            null;
+
+          if (!selectedInvoice)
+            return yield* Effect.die(
+              redirect({
+                params: { organizationId },
+                search: {},
+                to: "/app/$organizationId/invoices",
+              }),
+            );
+
+          const invoice =
+            selectedInvoice.status === "ready"
+              ? yield* getInvoice(organizationId, selectedInvoice.id)
+              : null;
+
           return {
-            invoice: null,
+            invoice,
             invoices,
-            selectedInvoice: null,
-            selectedInvoiceId: null,
+            selectedInvoice,
+            selectedInvoiceId: selectedInvoice.id,
           } satisfies {
             invoice: OrganizationDomain.InvoiceWithItems | null;
             invoices: readonly OrganizationDomain.Invoice[];
             selectedInvoice: OrganizationDomain.Invoice | null;
             selectedInvoiceId: string | null;
           };
-
-        const selectedInvoice =
-          invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null;
-
-        if (!selectedInvoice)
-          return yield* Effect.die(
-            redirect({
-              params: { organizationId },
-              search: {},
-              to: "/app/$organizationId/invoices",
-            }),
-          );
-
-        const invoice =
-          selectedInvoice.status === "ready"
-            ? yield* getInvoiceEffect(organizationId, selectedInvoice.id)
-            : null;
-
-        return {
-          invoice,
-          invoices,
-          selectedInvoice,
-          selectedInvoiceId: selectedInvoice.id,
-        } satisfies {
-          invoice: OrganizationDomain.InvoiceWithItems | null;
-          invoices: readonly OrganizationDomain.Invoice[];
-          selectedInvoice: OrganizationDomain.Invoice | null;
-          selectedInvoiceId: string | null;
-        };
-      }),
-    ),
+        }),
+      ),
   );
 
 export const Route = createFileRoute("/app/$organizationId/invoices/")({
@@ -128,12 +138,16 @@ function RouteComponent() {
   const router = useRouter();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [copiedField, setCopiedField] = React.useState<"json" | null>(null);
-  const [pendingSelectedInvoiceId, setPendingSelectedInvoiceId] = React.useState<string | null>(null);
+  const [pendingSelectedInvoiceId, setPendingSelectedInvoiceId] =
+    React.useState<string | null>(null);
 
   const setSelectedInvoiceId = React.useCallback(
     (invoiceId: string | undefined) => {
       setPendingSelectedInvoiceId(null);
-      void navigate({ search: (prev) => ({ ...prev, selectedInvoiceId: invoiceId }), replace: true });
+      void navigate({
+        search: (prev) => ({ ...prev, selectedInvoiceId: invoiceId }),
+        replace: true,
+      });
     },
     [navigate],
   );
@@ -148,10 +162,14 @@ function RouteComponent() {
 
   React.useEffect(() => {
     if (!pendingSelectedInvoiceId || selectedInvoiceId) return;
-    if (!invoices.some((invoice) => invoice.id === pendingSelectedInvoiceId)) return;
+    if (!invoices.some((invoice) => invoice.id === pendingSelectedInvoiceId))
+      return;
     void navigate({
       replace: true,
-      search: (prev) => ({ ...prev, selectedInvoiceId: pendingSelectedInvoiceId }),
+      search: (prev) => ({
+        ...prev,
+        selectedInvoiceId: pendingSelectedInvoiceId,
+      }),
     });
     setPendingSelectedInvoiceId(null);
   }, [invoices, navigate, pendingSelectedInvoiceId, selectedInvoiceId]);
@@ -162,7 +180,11 @@ function RouteComponent() {
       const buffer = await file.arrayBuffer();
       const base64 = btoa(String.fromCodePoint(...new Uint8Array(buffer)));
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
-      return stub.uploadInvoice({ fileName: file.name, contentType: file.type, base64 });
+      return stub.uploadInvoice({
+        fileName: file.name,
+        contentType: file.type,
+        base64,
+      });
     },
     onSuccess: (result) => {
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -194,8 +216,13 @@ function RouteComponent() {
       });
     },
   });
-  const displayedInvoice: OrganizationDomain.InvoiceWithItems | OrganizationDomain.Invoice | null =
-    selectedInvoice?.status === "ready" ? invoice ?? selectedInvoice : selectedInvoice;
+  const displayedInvoice:
+    | OrganizationDomain.InvoiceWithItems
+    | OrganizationDomain.Invoice
+    | null =
+    selectedInvoice?.status === "ready"
+      ? (invoice ?? selectedInvoice)
+      : selectedInvoice;
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -212,7 +239,9 @@ function RouteComponent() {
             <div className="flex items-center justify-between gap-4">
               <div>
                 <CardTitle>No invoices yet</CardTitle>
-                <CardDescription>Upload or create an invoice to get started.</CardDescription>
+                <CardDescription>
+                  Upload or create an invoice to get started.
+                </CardDescription>
               </div>
               <div className="flex items-center gap-2">
                 <Input
@@ -344,7 +373,11 @@ function RouteComponent() {
                     {invoices.map((invoice) => (
                       <TableRow
                         key={invoice.id}
-                        data-state={selectedInvoice?.id === invoice.id ? "selected" : undefined}
+                        data-state={
+                          selectedInvoice?.id === invoice.id
+                            ? "selected"
+                            : undefined
+                        }
                         className="h-12"
                         onClick={() => {
                           setSelectedInvoiceId(invoice.id);
@@ -352,7 +385,9 @@ function RouteComponent() {
                       >
                         <TableCell className="font-medium">
                           <span className="flex items-center gap-2">
-                            <span className="truncate">{invoice.name || invoice.fileName}</span>
+                            <span className="truncate">
+                              {invoice.name || invoice.fileName}
+                            </span>
                             {invoice.viewUrl && (
                               <a
                                 href={invoice.viewUrl}
@@ -376,13 +411,16 @@ function RouteComponent() {
                           {new Date(invoice.createdAt).toLocaleString()}
                         </TableCell>
                         <TableCell>
-                          {(invoice.status === "ready" || invoice.status === "error") && (
+                          {(invoice.status === "ready" ||
+                            invoice.status === "error") && (
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                deleteInvoiceMutation.mutate({ invoiceId: invoice.id });
+                                deleteInvoiceMutation.mutate({
+                                  invoiceId: invoice.id,
+                                });
                               }}
                               disabled={deleteInvoiceMutation.isPending}
                             >
@@ -405,7 +443,8 @@ function RouteComponent() {
                   <CardTitle>Invoice</CardTitle>
                   <CardDescription>
                     {(() => {
-                      if (!selectedInvoice) return "Select an invoice to view details.";
+                      if (!selectedInvoice)
+                        return "Select an invoice to view details.";
                       if (selectedInvoice.name)
                         return `${selectedInvoice.name} (${selectedInvoice.fileName})`;
                       return `(${selectedInvoice.fileName})`;
@@ -419,7 +458,10 @@ function RouteComponent() {
                       from={Route.fullPath}
                       to="/app/$organizationId/invoices/$invoiceId"
                       params={{ organizationId, invoiceId: selectedInvoice.id }}
-                      className={buttonVariants({ variant: "outline", size: "sm" })}
+                      className={buttonVariants({
+                        variant: "outline",
+                        size: "sm",
+                      })}
                     >
                       <FilePenLine className="size-4" />
                       Edit invoice
@@ -430,7 +472,11 @@ function RouteComponent() {
             <CardContent>
               {(() => {
                 if (displayedInvoice === null)
-                  return <p className="text-sm text-muted-foreground">No invoice selected.</p>;
+                  return (
+                    <p className="text-sm text-muted-foreground">
+                      No invoice selected.
+                    </p>
+                  );
                 if (displayedInvoice.status === "error")
                   return (
                     <Alert variant="destructive">
@@ -442,28 +488,46 @@ function RouteComponent() {
                     </Alert>
                   );
                 if (displayedInvoice.status !== "ready")
-                  return <p className="text-sm text-muted-foreground">Extraction in progress.</p>;
+                  return (
+                    <p className="text-sm text-muted-foreground">
+                      Extraction in progress.
+                    </p>
+                  );
                 return (
                   <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
                     <div className="flex flex-col gap-5">
                       <div className="flex items-start justify-between gap-4">
                         <div>
-                          <p className="text-lg font-semibold">{displayedInvoice.vendorName || "—"}</p>
-                          <p className="whitespace-pre-line text-sm text-muted-foreground">{displayedInvoice.vendorAddress || "—"}</p>
+                          <p className="text-lg font-semibold">
+                            {displayedInvoice.vendorName || "—"}
+                          </p>
+                          <p className="text-sm whitespace-pre-line text-muted-foreground">
+                            {displayedInvoice.vendorAddress || "—"}
+                          </p>
                           {displayedInvoice.vendorEmail && (
-                            <p className="text-sm text-muted-foreground">{displayedInvoice.vendorEmail}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {displayedInvoice.vendorEmail}
+                            </p>
                           )}
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-medium">Invoice #{displayedInvoice.invoiceNumber || "—"}</p>
+                          <p className="text-sm font-medium">
+                            Invoice #{displayedInvoice.invoiceNumber || "—"}
+                          </p>
                           {displayedInvoice.invoiceDate && (
-                            <p className="text-sm text-muted-foreground">Date: {displayedInvoice.invoiceDate}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Date: {displayedInvoice.invoiceDate}
+                            </p>
                           )}
                           {displayedInvoice.dueDate && (
-                            <p className="text-sm text-muted-foreground">Due: {displayedInvoice.dueDate}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Due: {displayedInvoice.dueDate}
+                            </p>
                           )}
                           {displayedInvoice.currency && (
-                            <p className="text-sm text-muted-foreground">Currency: {displayedInvoice.currency}</p>
+                            <p className="text-sm text-muted-foreground">
+                              Currency: {displayedInvoice.currency}
+                            </p>
                           )}
                         </div>
                       </div>
@@ -471,11 +535,19 @@ function RouteComponent() {
                       <Separator />
 
                       <div>
-                        <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">Bill To</p>
-                        <p className="text-sm font-medium">{displayedInvoice.billToName || "—"}</p>
-                        <p className="whitespace-pre-line text-sm text-muted-foreground">{displayedInvoice.billToAddress || "—"}</p>
+                        <p className="mb-1 text-xs font-medium text-muted-foreground uppercase">
+                          Bill To
+                        </p>
+                        <p className="text-sm font-medium">
+                          {displayedInvoice.billToName || "—"}
+                        </p>
+                        <p className="text-sm whitespace-pre-line text-muted-foreground">
+                          {displayedInvoice.billToAddress || "—"}
+                        </p>
                         {displayedInvoice.billToEmail && (
-                          <p className="text-sm text-muted-foreground">{displayedInvoice.billToEmail}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {displayedInvoice.billToEmail}
+                          </p>
                         )}
                       </div>
 
@@ -488,29 +560,51 @@ function RouteComponent() {
                               <TableHeader>
                                 <TableRow>
                                   <TableHead>Description</TableHead>
-                                  <TableHead className="text-right">Qty</TableHead>
-                                  <TableHead className="text-right">Unit Price</TableHead>
-                                  <TableHead className="text-right">Amount</TableHead>
+                                  <TableHead className="text-right">
+                                    Qty
+                                  </TableHead>
+                                  <TableHead className="text-right">
+                                    Unit Price
+                                  </TableHead>
+                                  <TableHead className="text-right">
+                                    Amount
+                                  </TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
-                                {invoice.invoiceItems.map((item: OrganizationDomain.InvoiceWithItems["invoiceItems"][number]) => (
-                                  <TableRow key={item.id}>
-                                    <TableCell>
-                                      <p>{item.description || "—"}</p>
-                                      {item.period && (
-                                        <p className="text-xs text-muted-foreground">{item.period}</p>
-                                      )}
-                                    </TableCell>
-                                    <TableCell className="text-right">{item.quantity || "—"}</TableCell>
-                                    <TableCell className="text-right">{item.unitPrice || "—"}</TableCell>
-                                    <TableCell className="text-right">{item.amount || "—"}</TableCell>
-                                  </TableRow>
-                                ))}
+                                {invoice.invoiceItems.map(
+                                  (
+                                    item: OrganizationDomain.InvoiceWithItems["invoiceItems"][number],
+                                  ) => (
+                                    <TableRow key={item.id}>
+                                      <TableCell>
+                                        <p>{item.description || "—"}</p>
+                                        {item.period && (
+                                          <p className="text-xs text-muted-foreground">
+                                            {item.period}
+                                          </p>
+                                        )}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {item.quantity || "—"}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {item.unitPrice || "—"}
+                                      </TableCell>
+                                      <TableCell className="text-right">
+                                        {item.amount || "—"}
+                                      </TableCell>
+                                    </TableRow>
+                                  ),
+                                )}
                               </TableBody>
                             </Table>
                           );
-                        return <p className="text-sm text-muted-foreground">No line items.</p>;
+                        return (
+                          <p className="text-sm text-muted-foreground">
+                            No line items.
+                          </p>
+                        );
                       })()}
 
                       <Separator />
@@ -518,7 +612,9 @@ function RouteComponent() {
                       <div className="flex flex-col items-end gap-1 text-sm">
                         {displayedInvoice.subtotal && (
                           <div className="flex gap-8">
-                            <span className="text-muted-foreground">Subtotal</span>
+                            <span className="text-muted-foreground">
+                              Subtotal
+                            </span>
                             <span>{displayedInvoice.subtotal}</span>
                           </div>
                         )}
@@ -531,13 +627,17 @@ function RouteComponent() {
                         {displayedInvoice.total && (
                           <div className="flex gap-8">
                             <span className="font-medium">Total</span>
-                            <span className="font-medium">{displayedInvoice.total}</span>
+                            <span className="font-medium">
+                              {displayedInvoice.total}
+                            </span>
                           </div>
                         )}
                         {displayedInvoice.amountDue && (
                           <div className="mt-1 flex gap-8 border-t pt-1">
                             <span className="font-semibold">Amount Due</span>
-                            <span className="font-semibold">{displayedInvoice.amountDue}</span>
+                            <span className="font-semibold">
+                              {displayedInvoice.amountDue}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -553,7 +653,10 @@ function RouteComponent() {
                             size="sm"
                             onClick={() => {
                               if (displayedInvoice.extractedJson) {
-                                void copyText(displayedInvoice.extractedJson, "json");
+                                void copyText(
+                                  displayedInvoice.extractedJson,
+                                  "json",
+                                );
                               }
                             }}
                           >
@@ -563,11 +666,17 @@ function RouteComponent() {
                         )}
                       </div>
                       {displayedInvoice.extractedJson ? (
-                        <pre className="max-h-144 overflow-auto whitespace-pre-wrap rounded-md border bg-muted/30 p-4 text-xs leading-5">
-                          {JSON.stringify(JSON.parse(displayedInvoice.extractedJson), null, 2)}
+                        <pre className="max-h-144 overflow-auto rounded-md border bg-muted/30 p-4 text-xs leading-5 whitespace-pre-wrap">
+                          {JSON.stringify(
+                            JSON.parse(displayedInvoice.extractedJson),
+                            null,
+                            2,
+                          )}
                         </pre>
                       ) : (
-                        <p className="text-sm text-muted-foreground">No extracted data.</p>
+                        <p className="text-sm text-muted-foreground">
+                          No extracted data.
+                        </p>
                       )}
                     </div>
                   </div>

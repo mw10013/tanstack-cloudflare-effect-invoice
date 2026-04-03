@@ -6,8 +6,9 @@ import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { Request as AppRequest } from "@/lib/Request";
 
-export const getOrganizationAgentStub = (organizationId: string) =>
-  Effect.gen(function* () {
+export const getOrganizationAgentStub = Effect.fn(
+  "getOrganizationAgentStub",
+)(function* (organizationId: string) {
     const request = yield* AppRequest;
     const auth = yield* Auth;
     yield* auth.getSession(request.headers).pipe(
@@ -22,7 +23,7 @@ export const getOrganizationAgentStub = (organizationId: string) =>
     return ORGANIZATION_AGENT.get(id);
   });
 
-export const getInvoicesEffect = Effect.fn("getInvoicesEffect")(function* (
+export const getInvoices = Effect.fn("getInvoices")(function* (
   organizationId: string,
 ) {
   const stub = yield* getOrganizationAgentStub(organizationId);
@@ -69,9 +70,9 @@ export const getInvoicesEffect = Effect.fn("getInvoicesEffect")(function* (
   );
 });
 
-export const getInvoiceEffect = Effect.fn("getInvoiceEffect")(function* (
+export const getInvoice = Effect.fn("getInvoice")(function* (
   organizationId: string,
-  invoiceId: string,
+  invoiceId: OrganizationDomain.Invoice["id"],
 ) {
   const stub = yield* getOrganizationAgentStub(organizationId);
   const invoice: OrganizationDomain.InvoiceWithItems | null =
@@ -79,12 +80,10 @@ export const getInvoiceEffect = Effect.fn("getInvoiceEffect")(function* (
   return invoice ? structuredClone(invoice) : null;
 });
 
-export const getInvoiceViewUrl = (
+export const getInvoiceViewUrl = Effect.fn("getInvoiceViewUrl")(function* (
   organizationId: string,
   invoice: OrganizationDomain.InvoiceWithItems,
-) =>
-  Effect.gen(function* () {
-    if (!invoice.r2ObjectKey) return;
+) {
     const environment = yield* Config.nonEmptyString("ENVIRONMENT");
     if (environment === "local")
       return `/api/org/${organizationId}/invoice/${encodeURIComponent(invoice.id)}`;
