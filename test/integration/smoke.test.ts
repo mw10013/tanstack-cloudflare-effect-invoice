@@ -21,7 +21,9 @@ describe("integration smoke", () => {
     const loginClientRpc = createClientRpc(loginServerFn.serverFnMeta.id);
     const fetchServerFn = (url: string, init?: RequestInit) =>
       exports.default.fetch(new Request(new URL(url, "http://example.com"), init));
-    const result = (await runWithStartContext(
+    const result = await runWithStartContext<{
+      result: Awaited<ReturnType<typeof login>>;
+    }>(
       {
         contextAfterGlobalMiddlewares: {},
         executedRequestMiddlewares: new Set(),
@@ -37,12 +39,7 @@ describe("integration smoke", () => {
           method: "POST",
           fetch: fetchServerFn,
         }),
-    )) as {
-      result: {
-        magicLink: string;
-        success: boolean;
-      };
-    };
+    );
 
     expect(result.result.success).toBe(true);
     expect(result.result.magicLink).toContain("/api/auth/magic-link/verify");

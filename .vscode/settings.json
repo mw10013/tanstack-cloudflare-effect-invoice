@@ -15,5 +15,7 @@
   "editor.codeActionsOnSave": {
     "source.fixAll.oxc": "always"
   },
-  "oxc.typeAware": true
+  "oxc.typeAware": true,
+
+  "diffEditor.renderSideBySide": false
 }
