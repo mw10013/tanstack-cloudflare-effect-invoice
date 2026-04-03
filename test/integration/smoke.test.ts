@@ -1,38 +1,41 @@
 import { login } from "@/lib/Login";
 import { exports } from "cloudflare:workers";
+import type {
+  CustomFetch,
+  Method,
+  RequiredFetcher,
+} from "@tanstack/react-start";
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
 import { describe, expect, it } from "vitest";
 
 import { resetDb } from "../test-utils";
 
-type ServerFnArgs<T> = T extends (...args: infer A) => unknown ? A : never;
+type TestServerFn<TInputValidator, TResponse> =
+  RequiredFetcher<undefined, TInputValidator, TResponse>;
 
-type ServerFnInput<T> = ServerFnArgs<T> extends [infer P, ...unknown[]]
-  ? P
-  : never;
-
-type ServerFnData<T> = ServerFnInput<T> extends { data: infer D } ? D : never;
-
-type ServerFnResult<T> = T extends (...args: infer _A) => infer R
-  ? Awaited<R>
-  : never;
-
-interface RunServerFnArgs<T> {
-  serverFn: T;
-  data: ServerFnData<T>;
-}
-
-const runServerFn = async <T>({
+const runServerFn = async <TInputValidator, TResponse>({
   serverFn,
   data,
-}: RunServerFnArgs<T>) => {
-  const serverFnWithMeta = serverFn as T & { serverFnMeta: { id: string } };
-  const clientRpc = createClientRpc(serverFnWithMeta.serverFnMeta.id);
+}: {
+  serverFn: TestServerFn<TInputValidator, TResponse>;
+  data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
+}) => {
+  const serverFnWithMeta = serverFn as TestServerFn<TInputValidator, TResponse> & {
+    serverFnMeta: { id: string };
+  };
+  const clientRpc = createClientRpc(serverFnWithMeta.serverFnMeta.id) as (
+    options: {
+      method: Method;
+      fetch: CustomFetch;
+      data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
+    },
+  ) => Promise<{ result: Awaited<TResponse>; error?: unknown }>;
   const fetchServerFn = (url: string, init?: RequestInit) =>
     exports.default.fetch(new Request(new URL(url, "http://example.com"), init));
   const result = await runWithStartContext<{
-    result: ServerFnResult<T>;
+    result: Awaited<TResponse>;
+    error?: unknown;
   }>(
     {
       contextAfterGlobalMiddlewares: {},
@@ -46,9 +49,13 @@ const runServerFn = async <T>({
     () =>
       clientRpc({
         data,
-        method: "POST",
+        method: serverFn.method,
         fetch: fetchServerFn,
-      } as ServerFnInput<T>),
+      } as {
+        method: Method;
+        fetch: CustomFetch;
+        data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
+      }),
   );
 
   return result.result;
