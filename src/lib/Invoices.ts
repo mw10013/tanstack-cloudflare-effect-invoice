@@ -1,4 +1,5 @@
 import type * as OrganizationDomain from "@/lib/OrganizationDomain";
+import type { Organization } from "@/lib/Domain";
 
 import { Cause, Config, Effect, Redacted } from "effect";
 
@@ -8,7 +9,7 @@ import { Request as AppRequest } from "@/lib/Request";
 
 export const getOrganizationAgentStub = Effect.fn(
   "getOrganizationAgentStub",
-)(function* (organizationId: string) {
+)(function* (organizationId: Organization["id"]) {
     const request = yield* AppRequest;
     const auth = yield* Auth;
     yield* auth.getSession(request.headers).pipe(
@@ -24,7 +25,7 @@ export const getOrganizationAgentStub = Effect.fn(
   });
 
 export const getInvoices = Effect.fn("getInvoices")(function* (
-  organizationId: string,
+  organizationId: Organization["id"],
 ) {
   const stub = yield* getOrganizationAgentStub(organizationId);
   const invoices = yield* Effect.tryPromise(() => stub.getInvoices());
@@ -71,7 +72,7 @@ export const getInvoices = Effect.fn("getInvoices")(function* (
 });
 
 export const getInvoice = Effect.fn("getInvoice")(function* (
-  organizationId: string,
+  organizationId: Organization["id"],
   invoiceId: OrganizationDomain.Invoice["id"],
 ) {
   const stub = yield* getOrganizationAgentStub(organizationId);
@@ -81,7 +82,7 @@ export const getInvoice = Effect.fn("getInvoice")(function* (
 });
 
 export const getInvoiceViewUrl = Effect.fn("getInvoiceViewUrl")(function* (
-  organizationId: string,
+  organizationId: Organization["id"],
   invoice: OrganizationDomain.InvoiceWithItems,
 ) {
     const environment = yield* Config.nonEmptyString("ENVIRONMENT");
