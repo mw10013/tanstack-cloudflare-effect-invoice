@@ -1,21 +1,23 @@
-import { login } from "@/lib/Login";
-import { exports } from "cloudflare:workers";
 import type { ClientFnMeta, RequiredFetcher } from "@tanstack/react-start";
+
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
+import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+
+import { login } from "@/lib/Login";
 
 import { resetDb } from "../test-utils";
 
-type TestServerFn<TInputValidator, TResponse> =
-  RequiredFetcher<undefined, TInputValidator, TResponse> & {
-    serverFnMeta?: ClientFnMeta;
-  };
-
-const runServerFn = async <
+type TestServerFn<TInputValidator, TResponse> = RequiredFetcher<
+  undefined,
   TInputValidator,
-  TResponse,
->({
+  TResponse
+> & {
+  serverFnMeta?: ClientFnMeta;
+};
+
+const runServerFn = async <TInputValidator, TResponse>({
   serverFn,
   data,
 }: {
@@ -25,10 +27,11 @@ const runServerFn = async <
   if (!serverFn.serverFnMeta) {
     throw new Error("Missing serverFnMeta in integration test");
   }
-
   const clientRpc = createClientRpc(serverFn.serverFnMeta.id);
   const fetchServerFn = (url: string, init?: RequestInit) =>
-    exports.default.fetch(new Request(new URL(url, "http://example.com"), init));
+    exports.default.fetch(
+      new Request(new URL(url, "http://example.com"), init),
+    );
   const result = await runWithStartContext(
     {
       contextAfterGlobalMiddlewares: {},
