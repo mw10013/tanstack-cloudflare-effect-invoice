@@ -17,7 +17,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       const sql = yield* SqlClient.SqlClient;
 
       const findInvoice = Effect.fn("OrganizationRepository.findInvoice")(
-        function* (invoiceId: string) {
+        function* (invoiceId: OrganizationDomain.Invoice["id"]) {
           const rows = yield* sql`select * from Invoice where id = ${invoiceId}`;
           return rows.length > 0
             ? yield* Effect.asSome(decodeInvoice(rows[0]))
@@ -34,7 +34,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
 
       const getInvoice = Effect.fn(
         "OrganizationRepository.getInvoice",
-      )(function* (invoiceId: string) {
+      )(function* (invoiceId: OrganizationDomain.Invoice["id"]) {
         const rows = yield* sql`
           select json_object(
             'id', i.id,
@@ -94,15 +94,10 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       });
 
       const upsertInvoice = Effect.fn("OrganizationRepository.upsertInvoice")(
-        function* (input: {
-          invoiceId: string;
-          name: string;
-          fileName: string;
-          contentType: string;
-          r2ActionTime: number;
-          idempotencyKey: string;
-          r2ObjectKey: string;
-          status: OrganizationDomain.InvoiceStatus;
+        function* (input: Pick<OrganizationDomain.Invoice, "name" | "fileName" | "contentType" | "r2ObjectKey" | "status"> & {
+          invoiceId: OrganizationDomain.Invoice["id"];
+          r2ActionTime: NonNullable<OrganizationDomain.Invoice["r2ActionTime"]>;
+          idempotencyKey: NonNullable<OrganizationDomain.Invoice["idempotencyKey"]>;
         }) {
           yield* sql`
             insert into Invoice (
@@ -145,13 +140,9 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const insertUploadingInvoice = Effect.fn("OrganizationRepository.insertUploadingInvoice")(
-        function* (input: {
-          invoiceId: string;
-          name: string;
-          fileName: string;
-          contentType: string;
-          idempotencyKey: string;
-          r2ObjectKey: string;
+        function* (input: Pick<OrganizationDomain.Invoice, "name" | "fileName" | "contentType" | "r2ObjectKey"> & {
+          invoiceId: OrganizationDomain.Invoice["id"];
+          idempotencyKey: NonNullable<OrganizationDomain.Invoice["idempotencyKey"]>;
         }) {
           yield* sql`
             insert into Invoice (id, name, fileName, contentType, idempotencyKey, r2ObjectKey, status)
@@ -165,7 +156,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const deleteInvoiceRecord = Effect.fn("OrganizationRepository.deleteInvoiceRecord")(
-        function* (invoiceId: string) {
+        function* (invoiceId: OrganizationDomain.Invoice["id"]) {
           return yield* sql`
             delete from Invoice
             where id = ${invoiceId} and status in ('ready', 'error')
@@ -178,10 +169,10 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         "OrganizationRepository.saveInvoiceExtraction",
       )(
         function* (input: {
-          invoiceId: string;
-          idempotencyKey: string;
+          invoiceId: OrganizationDomain.Invoice["id"];
+          idempotencyKey: NonNullable<OrganizationDomain.Invoice["idempotencyKey"]>;
           extractedInvoice: typeof InvoiceExtractionSchema.Type;
-          extractedJson: string;
+          extractedJson: NonNullable<OrganizationDomain.Invoice["extractedJson"]>;
         }) {
           const { invoiceItems, ...extracted } = input.extractedInvoice;
           const updated = yield* sql`
@@ -223,7 +214,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const setError = Effect.fn("OrganizationRepository.setError")(
-        function* (workflowId: string, error: string) {
+        function* (workflowId: string, error: NonNullable<OrganizationDomain.Invoice["error"]>) {
           return yield* sql`
             update Invoice
             set status = 'error',
@@ -235,7 +226,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const createInvoice = Effect.fn("OrganizationRepository.createInvoice")(
-        function* (invoiceId: string) {
+        function* (invoiceId: OrganizationDomain.Invoice["id"]) {
           yield* sql`
             insert into Invoice (id, name, status)
             values (${invoiceId}, ${"Untitled Invoice"}, ${"ready"})
