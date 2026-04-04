@@ -23,8 +23,8 @@ export class Repository extends ServiceMap.Service<Repository>()("Repository", {
         userId,
         organizationId,
       }: {
-        userId: string;
-        organizationId: string;
+        userId: Domain.User["id"];
+        organizationId: Domain.Organization["id"];
       }) {
         const result = yield* d1.first(
           d1
@@ -41,7 +41,7 @@ export class Repository extends ServiceMap.Service<Repository>()("Repository", {
     );
     const getOwnerOrganizationByUserId = Effect.fn(
       "Repository.getOwnerOrganizationByUserId",
-    )(function* (userId: string) {
+    )(function* (userId: Domain.User["id"]) {
       const result = yield* d1.first(
         d1
           .prepare(
@@ -68,8 +68,8 @@ export class Repository extends ServiceMap.Service<Repository>()("Repository", {
       organizationId,
       userId,
     }: {
-      organizationId: string;
-      userId: string;
+      organizationId: Domain.Organization["id"];
+      userId: Domain.User["id"];
     }) {
       return yield* d1.run(
         d1
@@ -148,8 +148,8 @@ select json_object(
         userEmail,
         organizationId,
       }: {
-        userEmail: string;
-        organizationId: string;
+        userEmail: Domain.User["email"];
+        organizationId: Domain.Organization["id"];
       }) {
         const result = yield* d1.first(
           d1
@@ -567,8 +567,8 @@ select json_object(
         invitationId,
         role,
       }: {
-        invitationId: string;
-        role: string;
+        invitationId: Domain.Invitation["id"];
+        role: Domain.MemberRole;
       }) {
         return yield* d1.run(
           d1
