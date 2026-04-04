@@ -253,6 +253,19 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
+  /**
+   * Uploads an invoice file to R2, then inserts a DB row with status "uploading"
+   * so the UI has something to display before {@link onInvoiceUpload} runs.
+   *
+   * Fault tolerance:
+   * - If R2 put fails, no DB row is created — no dangling records.
+   * - The insert uses ON CONFLICT DO NOTHING: if {@link onInvoiceUpload} already
+   *   ran (possible because r2.put yields the event loop), the existing
+   *   "extracting" row is preserved and the insert is a no-op.
+   * - {@link onInvoiceUpload} handles a pre-existing "uploading" row correctly —
+   *   its idempotency guards skip only "extracting"/"ready", so it proceeds to
+   *   upsert the row to "extracting" and start the workflow.
+   */
   @callable()
   uploadInvoice(input: typeof UploadInvoiceInput.Type) {
     return this.runEffect(
@@ -293,6 +306,15 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
             }),
           );
         }
+        const repo = yield* OrganizationRepository;
+        yield* repo.insertUploadingInvoice({
+          invoiceId,
+          name: data.fileName.replace(/\.[^.]+$/, ""),
+          fileName: data.fileName,
+          contentType: data.contentType,
+          idempotencyKey,
+          r2ObjectKey: key,
+        });
         return { invoiceId };
       }),
     );

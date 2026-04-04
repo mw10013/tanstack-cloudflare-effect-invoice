@@ -144,6 +144,26 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
+      const insertUploadingInvoice = Effect.fn("OrganizationRepository.insertUploadingInvoice")(
+        function* (input: {
+          invoiceId: string;
+          name: string;
+          fileName: string;
+          contentType: string;
+          idempotencyKey: string;
+          r2ObjectKey: string;
+        }) {
+          yield* sql`
+            insert into Invoice (id, name, fileName, contentType, idempotencyKey, r2ObjectKey, status)
+            values (
+              ${input.invoiceId}, ${input.name}, ${input.fileName}, ${input.contentType},
+              ${input.idempotencyKey}, ${input.r2ObjectKey}, ${"uploading"}
+            )
+            on conflict(id) do nothing
+          `;
+        },
+      );
+
       const deleteInvoiceRecord = Effect.fn("OrganizationRepository.deleteInvoiceRecord")(
         function* (invoiceId: string) {
           return yield* sql`
@@ -269,6 +289,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         getInvoices,
         getInvoice,
         upsertInvoice,
+        insertUploadingInvoice,
         createInvoice,
         updateInvoice,
         deleteInvoiceRecord,

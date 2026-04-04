@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 export const InvoiceStatusValues = [
+  "uploading",
   "extracting",
   "ready",
   "error",

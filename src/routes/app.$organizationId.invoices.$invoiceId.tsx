@@ -162,8 +162,8 @@ function RouteComponent() {
           <AlertCircle className="size-4" />
           <AlertTitle>Read-only</AlertTitle>
           <AlertDescription>
-            {invoice.status === "extracting"
-              ? "This invoice is still extracting and cannot be edited yet."
+            {invoice.status === "uploading" || invoice.status === "extracting"
+              ? "This invoice is being processed and cannot be edited yet."
               : "This invoice cannot be edited."}
           </AlertDescription>
         </Alert>
