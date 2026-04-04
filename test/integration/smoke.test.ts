@@ -1,11 +1,6 @@
 import { login } from "@/lib/Login";
 import { exports } from "cloudflare:workers";
-import type {
-  ClientFnMeta,
-  CustomFetch,
-  Method,
-  RequiredFetcher,
-} from "@tanstack/react-start";
+import type { ClientFnMeta, RequiredFetcher } from "@tanstack/react-start";
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
 import { describe, expect, it } from "vitest";
@@ -31,19 +26,10 @@ const runServerFn = async <
     throw new Error("Missing serverFnMeta in integration test");
   }
 
-  const clientRpc = createClientRpc(serverFn.serverFnMeta.id) as (
-    options: {
-      method: Method;
-      fetch: CustomFetch;
-      data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
-    },
-  ) => Promise<{ result: Awaited<TResponse>; error?: unknown }>;
+  const clientRpc = createClientRpc(serverFn.serverFnMeta.id);
   const fetchServerFn = (url: string, init?: RequestInit) =>
     exports.default.fetch(new Request(new URL(url, "http://example.com"), init));
-  const result = await runWithStartContext<{
-    result: Awaited<TResponse>;
-    error?: unknown;
-  }>(
+  const result = await runWithStartContext(
     {
       contextAfterGlobalMiddlewares: {},
       executedRequestMiddlewares: new Set(),
@@ -53,16 +39,18 @@ const runServerFn = async <
       request: new Request("http://example.com"),
       startOptions: {},
     },
-    () =>
-      clientRpc({
+    () => {
+      // createClientRpc is typed as (...args: any[]) => Promise<any>, so keep the
+      // assertion at the boundary where we rely on its current wire format.
+      return clientRpc({
         data,
         method: serverFn.method,
         fetch: fetchServerFn,
-      } as {
-        method: Method;
-        fetch: CustomFetch;
-        data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
-      }),
+      }) as Promise<{
+        result: Awaited<TResponse>;
+        error?: unknown;
+      }>;
+    },
   );
 
   return result.result;
