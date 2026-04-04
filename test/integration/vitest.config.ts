@@ -61,6 +61,21 @@ export default defineConfig(async () => {
         TSS_SERVER_FN_BASE: process.env.TSS_SERVER_FN_BASE,
       },
       include: ["test/integration/*.test.ts"],
+      onUnhandledError: (error: unknown) => {
+        // Better Auth models redirects as APIError("FOUND"). The worker test
+        // runtime leaks that redirect sentinel as an unhandled rejection even
+        // though the response path under test succeeds.
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "name" in error &&
+          "status" in error &&
+          error.name === "APIError" &&
+          error.status === "FOUND"
+        ) {
+          return false;
+        }
+      },
       setupFiles: ["test/apply-migrations.ts"],
       testTimeout: 30000,
     },
