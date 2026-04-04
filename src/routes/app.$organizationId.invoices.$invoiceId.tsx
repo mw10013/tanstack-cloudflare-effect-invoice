@@ -64,7 +64,7 @@ export const Route = createFileRoute("/app/$organizationId/invoices/$invoiceId")
 });
 
 function RouteComponent() {
-  const { organizationId, invoiceId } = Route.useParams();
+  const { organizationId } = Route.useParams();
   const { invoice, viewUrl } = Route.useLoaderData();
   const isHydrated = useHydrated();
   const router = useRouter();
@@ -78,7 +78,7 @@ function RouteComponent() {
   const saveMutation = useMutation({
     mutationFn: (data: typeof defaultValues) =>
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
-      stub.updateInvoice({ invoiceId, ...data }),
+      stub.updateInvoice({ invoiceId: invoice.id, ...data }),
     onSuccess: () => {
       void router.invalidate();
     },
@@ -360,5 +360,4 @@ function RouteComponent() {
     </div>
   );
 }
-
 

@@ -9,7 +9,9 @@ import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { makeLoggerLayer } from "@/lib/LoggerLayer";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
+import type { Invoice } from "@/lib/OrganizationDomain";
 import {
+  InvoiceId,
   InvoiceLimitExceededError,
   OrganizationAgentError,
   activeWorkflowStatuses,
@@ -153,7 +155,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   onInvoiceUpload(upload: {
-    invoiceId: string;
+    invoiceId: Invoice["id"];
     r2ActionTime: string;
     idempotencyKey: string;
     r2ObjectKey: string;
@@ -231,7 +233,9 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
         const count = yield* repo.countInvoices();
         if (count >= invoiceLimit)
           return yield* new InvoiceLimitExceededError({ limit: invoiceLimit, message: `Invoice limit of ${String(invoiceLimit)} reached` });
-        const invoiceId: string = crypto.randomUUID();
+        const invoiceId = yield* Schema.decodeUnknownEffect(InvoiceId)(
+          crypto.randomUUID(),
+        );
         yield* repo.createInvoice(invoiceId);
         yield* broadcastActivity(this, {
           action: "invoice.created",
@@ -286,7 +290,9 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           return yield* new OrganizationAgentError({ message: "File too large" });
         if (!invoiceMimeTypes.includes(data.contentType as (typeof invoiceMimeTypes)[number]))
           return yield* new OrganizationAgentError({ message: "Invalid file type" });
-        const invoiceId = crypto.randomUUID();
+        const invoiceId = yield* Schema.decodeUnknownEffect(InvoiceId)(
+          crypto.randomUUID(),
+        );
         const idempotencyKey = crypto.randomUUID();
         const key = `${this.name}/invoices/${invoiceId}`;
         const bytes = Uint8Array.from(atob(data.base64), (c) => c.codePointAt(0) ?? 0);
@@ -361,7 +367,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  deleteInvoiceRecord(invoiceId: string) {
+  deleteInvoiceRecord(invoiceId: Invoice["id"]) {
     return this.runEffect(
       Effect.gen(function* () {
         const repo = yield* OrganizationRepository;
@@ -371,7 +377,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   saveInvoiceExtraction(input: {
-    invoiceId: string;
+    invoiceId: Invoice["id"];
     idempotencyKey: string;
     extractedInvoice: typeof InvoiceExtractionSchema.Type;
     extractedJson: string;

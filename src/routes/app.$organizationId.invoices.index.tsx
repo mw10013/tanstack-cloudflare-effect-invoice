@@ -44,6 +44,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import * as Domain from "@/lib/Domain";
+import type * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { getInvoice, getInvoicesWithViewUrl } from "@/lib/Invoices";
 import { useOrganizationAgent } from "@/lib/OrganizationAgentContext";
 
@@ -197,7 +198,7 @@ function RouteComponent() {
   });
   const deleteInvoiceMutation = useMutation({
     // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
-    mutationFn: ({ invoiceId }: { invoiceId: string }) =>
+    mutationFn: ({ invoiceId }: { invoiceId: OrganizationDomain.Invoice["id"] }) =>
       stub.deleteInvoice({ invoiceId }),
     onSettled: () => {
       void router.invalidate({

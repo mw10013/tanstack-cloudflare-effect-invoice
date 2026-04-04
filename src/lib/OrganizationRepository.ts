@@ -209,7 +209,9 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
           yield* sql`delete from InvoiceItem where invoiceId = ${input.invoiceId}`;
           for (let i = 0; i < invoiceItems.length; i++) {
             const item = invoiceItems[i];
-            const id = crypto.randomUUID();
+            const id = yield* Schema.decodeUnknownEffect(
+              OrganizationDomain.InvoiceItemId,
+            )(crypto.randomUUID());
             const order = i + 1;
             yield* sql`
               insert into InvoiceItem (id, invoiceId, "order", description, quantity, unitPrice, amount, period)
@@ -270,7 +272,9 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
             yield* sql`delete from InvoiceItem where invoiceId = ${input.invoiceId}`;
             for (let i = 0; i < input.invoiceItems.length; i++) {
               const item = input.invoiceItems[i];
-              const id = crypto.randomUUID();
+              const id = yield* Schema.decodeUnknownEffect(
+                OrganizationDomain.InvoiceItemId,
+              )(crypto.randomUUID());
               const order = i + 1;
               yield* sql`
                 insert into InvoiceItem (id, invoiceId, "order", description, quantity, unitPrice, amount, period)

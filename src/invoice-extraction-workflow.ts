@@ -9,12 +9,13 @@ import * as Result from "effect/Result";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import type { ActivityMessage } from "@/lib/Activity";
+import type { Invoice } from "@/lib/OrganizationDomain";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { InvoiceExtraction } from "@/lib/InvoiceExtraction";
 import { R2 } from "@/lib/R2";
 
 interface InvoiceExtractionWorkflowParams {
-  readonly invoiceId: string;
+  readonly invoiceId: Invoice["id"];
   readonly idempotencyKey: string;
   readonly r2ObjectKey: string;
   readonly fileName: string;
