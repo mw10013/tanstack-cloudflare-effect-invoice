@@ -393,6 +393,35 @@ Shared test utilities in `test/test-utils.ts`:
 - `parseSetCookie()` - parses Set-Cookie header into key-value record
 - `getSetCookie()` - gets the raw Set-Cookie header
 
+## Known Warnings
+
+### Empty href warning on every SSR render
+
+```
+An empty string ("") was passed to the href attribute. To fix this, either do not
+render the element at all or pass null to href instead of an empty string.
+```
+
+This appears in stderr for every test that renders a page (visible with `--reporter=verbose`).
+
+**Source:** `src/routes/__root.tsx` imports `appCss` via Vite's `?url` suffix:
+
+```ts
+import appCss from "../styles.css?url";
+```
+
+and passes it to `head()`:
+
+```ts
+head: () => ({
+  links: [{ rel: "stylesheet", href: appCss }],
+}),
+```
+
+**Mechanism:** In the workerd test runtime there is no Vite dev server or asset pipeline. The `?url` import resolves to an empty string `""`. That flows through `HeadContent` → `<link rel="stylesheet" href="">`. React DOM's development SSR renderer (`react-dom-server.edge.development.js:1437`) warns whenever any element receives `href=""`.
+
+**Impact:** Cosmetic only. The warning does not affect test correctness — the test environment exercises server-side logic (server fns, loaders, auth, D1), not client-side asset loading.
+
 ## Bottom Line
 
 Vitest is integrated here as a Worker-first integration setup:
