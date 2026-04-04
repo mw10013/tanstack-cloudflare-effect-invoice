@@ -10,6 +10,7 @@ import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { makeLoggerLayer } from "@/lib/LoggerLayer";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
 import {
+  InvoiceLimitExceededError,
   OrganizationAgentError,
   activeWorkflowStatuses,
 } from "@/lib/OrganizationDomain";
@@ -225,7 +226,11 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   createInvoice() {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
+        const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
+        const count = yield* repo.countInvoices();
+        if (count >= invoiceLimit)
+          return yield* new InvoiceLimitExceededError({ limit: invoiceLimit, message: `Invoice limit of ${invoiceLimit} reached` });
         const invoiceId: string = crypto.randomUUID();
         yield* repo.createInvoice(invoiceId);
         yield* broadcastActivity(this, {
@@ -272,6 +277,11 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       Effect.gen({ self: this }, function* () {
         const data = yield* Schema.decodeUnknownEffect(UploadInvoiceInput)(input);
         yield* getConnectionIdentity();
+        const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
+        const repo = yield* OrganizationRepository;
+        const count = yield* repo.countInvoices();
+        if (count >= invoiceLimit)
+          return yield* new InvoiceLimitExceededError({ limit: invoiceLimit, message: `Invoice limit of ${invoiceLimit} reached` });
         if (data.base64.length > MAX_BASE64_SIZE)
           return yield* new OrganizationAgentError({ message: "File too large" });
         if (!invoiceMimeTypes.includes(data.contentType as (typeof invoiceMimeTypes)[number]))
@@ -306,7 +316,6 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
             }),
           );
         }
-        const repo = yield* OrganizationRepository;
         yield* repo.insertUploadingInvoice({
           invoiceId,
           name: data.fileName.replace(/\.[^.]+$/, ""),

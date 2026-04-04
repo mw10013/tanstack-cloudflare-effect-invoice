@@ -63,4 +63,9 @@ export class OrganizationAgentError extends Schema.TaggedErrorClass<Organization
   { message: Schema.String },
 ) {}
 
+export class InvoiceLimitExceededError extends Schema.TaggedErrorClass<InvoiceLimitExceededError>()(
+  "InvoiceLimitExceededError",
+  { limit: Schema.Number, message: Schema.String },
+) {}
+
 export const activeWorkflowStatuses = new Set<InstanceStatus["status"]>(["queued", "running", "waiting"]);

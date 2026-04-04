@@ -270,12 +270,12 @@ function RouteComponent() {
                 </Button>
               </div>
             </div>
-            {uploadMutation.error && (
+            {(uploadMutation.error ?? createInvoiceMutation.error) && (
               <Alert variant="destructive" className="mt-2">
                 <AlertCircle className="size-4" />
                 <AlertTitle>Error</AlertTitle>
                 <AlertDescription>
-                  {uploadMutation.error.message}
+                  {(uploadMutation.error ?? createInvoiceMutation.error)?.message}
                 </AlertDescription>
               </Alert>
             )}
@@ -333,12 +333,12 @@ function RouteComponent() {
                   </Button>
                 </div>
               </div>
-              {uploadMutation.error && (
+              {(uploadMutation.error ?? createInvoiceMutation.error) && (
                 <Alert variant="destructive" className="mt-2">
                   <AlertCircle className="size-4" />
                   <AlertTitle>Error</AlertTitle>
                   <AlertDescription>
-                    {uploadMutation.error.message}
+                    {(uploadMutation.error ?? createInvoiceMutation.error)?.message}
                   </AlertDescription>
                 </Alert>
               )}

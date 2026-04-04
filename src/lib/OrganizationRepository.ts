@@ -16,6 +16,13 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
     make: Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
+      const countInvoices = Effect.fn("OrganizationRepository.countInvoices")(
+        function* () {
+          const rows = yield* sql`select count(*) as count from Invoice`;
+          return (rows[0] as { count: number }).count;
+        },
+      );
+
       const findInvoice = Effect.fn("OrganizationRepository.findInvoice")(
         function* (invoiceId: OrganizationDomain.Invoice["id"]) {
           const rows = yield* sql`select * from Invoice where id = ${invoiceId}`;
@@ -276,6 +283,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       return {
+        countInvoices,
         findInvoice,
         getInvoices,
         getInvoice,
