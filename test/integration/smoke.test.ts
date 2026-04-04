@@ -1,6 +1,7 @@
 import { login } from "@/lib/Login";
 import { exports } from "cloudflare:workers";
 import type {
+  ClientFnMeta,
   CustomFetch,
   Method,
   RequiredFetcher,
@@ -12,7 +13,9 @@ import { describe, expect, it } from "vitest";
 import { resetDb } from "../test-utils";
 
 type TestServerFn<TInputValidator, TResponse> =
-  RequiredFetcher<undefined, TInputValidator, TResponse>;
+  RequiredFetcher<undefined, TInputValidator, TResponse> & {
+    serverFnMeta?: ClientFnMeta;
+  };
 
 const runServerFn = async <
   TInputValidator,
@@ -24,10 +27,11 @@ const runServerFn = async <
   serverFn: TestServerFn<TInputValidator, TResponse>;
   data: Parameters<TestServerFn<TInputValidator, TResponse>>[0]["data"];
 }) => {
-  const serverFnWithMeta = serverFn as TestServerFn<TInputValidator, TResponse> & {
-    serverFnMeta: { id: string };
-  };
-  const clientRpc = createClientRpc(serverFnWithMeta.serverFnMeta.id) as (
+  if (!serverFn.serverFnMeta) {
+    throw new Error("Missing serverFnMeta in integration test");
+  }
+
+  const clientRpc = createClientRpc(serverFn.serverFnMeta.id) as (
     options: {
       method: Method;
       fetch: CustomFetch;
