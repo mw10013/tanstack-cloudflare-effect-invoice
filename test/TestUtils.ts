@@ -112,28 +112,40 @@ const skipInitialMessages = Effect.fn("skipInitialMessages")(
   },
 );
 
+/**
+ * Calls a @callable() method on a Cloudflare Agent over its shared WebSocket.
+ *
+ * Uses `Effect.callback` to bridge the callback-based `addEventListener` API
+ * into Effect. `addEventListener` doesn't return a Promise — the result arrives
+ * later through the handler function. `Effect.callback((resume) => ...)` lets us
+ * call `resume(Effect.succeed(msg))` when the handler fires, which completes
+ * the Effect with that value.
+ *
+ * The function returned from the `Effect.callback` register is a finalizer —
+ * it runs when the Effect is interrupted (e.g. by `Effect.timeout`), removing
+ * the event listener so it doesn't leak.
+ */
 export const callAgentRpc = Effect.fn("callAgentRpc")(
-  // oxlint-disable-next-line @typescript-eslint/no-inferrable-types -- oxlint sees Effect.fn generator params as any; explicit type prevents no-unsafe-argument on setTimeout
+  // oxlint-disable-next-line @typescript-eslint/no-inferrable-types -- oxlint sees Effect.fn generator params as any; explicit type prevents no-unsafe-argument on Effect.timeout
   function*(ws: WebSocket, method: string, args: unknown[] = [], timeout: number = 10_000) {
-    return yield* Effect.promise<RPCResponse>(() => {
+    return yield* Effect.callback<RPCResponse>((resume) => {
       const id = crypto.randomUUID();
       ws.send(JSON.stringify({ type: "rpc", id, method, args }));
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(new Error(`RPC timeout: ${method}`));
-        }, timeout);
-        const handler = (e: MessageEvent) => {
-          const msg = JSON.parse(e.data as string) as RPCResponse;
-          if (msg.type === MessageType.RPC && msg.id === id) {
-            if (msg.success && !msg.done) return;
-            clearTimeout(timer);
-            ws.removeEventListener("message", handler);
-            resolve(msg);
-          }
-        };
-        ws.addEventListener("message", handler);
-      });
-    });
+      const handler = (e: MessageEvent) => {
+        const msg = JSON.parse(e.data as string) as RPCResponse;
+        if (msg.type === MessageType.RPC && msg.id === id) {
+          if (msg.success && !msg.done) return;
+          ws.removeEventListener("message", handler);
+          resume(Effect.succeed(msg));
+        }
+      };
+      ws.addEventListener("message", handler);
+      return Effect.sync(() => { ws.removeEventListener("message", handler); });
+    }).pipe(
+      Effect.timeout(timeout),
+      Effect.catchTag("TimeoutError", () =>
+        Effect.die(new Error(`RPC timeout: ${method}`))),
+    );
   },
 );
 
