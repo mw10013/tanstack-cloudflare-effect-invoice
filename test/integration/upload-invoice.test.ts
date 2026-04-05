@@ -5,11 +5,10 @@ import { layer } from "@effect/vitest";
 import { assertFalse, assertInclude, assertTrue } from "@effect/vitest/utils";
 import { expect } from "vitest";
 
-import type { RPCResponse } from "agents";
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
 import {
   agentWebSocket,
-  callRpc,
+  callAgentRpc,
   fetchWorker,
   loginAndGetAuth,
   pollInvoiceStatus,
@@ -33,7 +32,7 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       const { sessionCookie, orgId } = yield* loginAndGetAuth();
       const ws = yield* agentWebSocket(orgId, sessionCookie);
 
-      const uploadResult: RPCResponse = yield* callRpc(ws, "uploadInvoice", [
+      const uploadResult = yield* callAgentRpc(ws, "uploadInvoice", [
         {
           fileName: "invoice-1-redacted.png",
           contentType: "image/png",
@@ -59,7 +58,7 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       const { sessionCookie, orgId } = yield* loginAndGetAuth();
       const ws = yield* agentWebSocket(orgId, sessionCookie);
 
-      const result: RPCResponse = yield* callRpc(ws, "uploadInvoice", [
+      const result = yield* callAgentRpc(ws, "uploadInvoice", [
         {
           fileName: "test.txt",
           contentType: "text/plain",
@@ -82,7 +81,7 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       const maxBase64Size = Math.ceil((10_000_000 * 4) / 3) + 4;
       const oversizedBase64 = "A".repeat(maxBase64Size + 1);
 
-      const result: RPCResponse = yield* callRpc(ws, "uploadInvoice", [
+      const result = yield* callAgentRpc(ws, "uploadInvoice", [
         {
           fileName: "huge.png",
           contentType: "image/png",
@@ -107,13 +106,13 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
 
       yield* Effect.repeat(
         Effect.gen(function*() {
-          const result: RPCResponse = yield* callRpc(ws, "createInvoice", []);
+          const result = yield* callAgentRpc(ws, "createInvoice", []);
           assertTrue(result.success);
         }),
         Schedule.recurs(invoiceLimit - 1),
       );
 
-      const result: RPCResponse = yield* callRpc(ws, "uploadInvoice", [
+      const result = yield* callAgentRpc(ws, "uploadInvoice", [
         {
           fileName: "over-limit.png",
           contentType: "image/png",

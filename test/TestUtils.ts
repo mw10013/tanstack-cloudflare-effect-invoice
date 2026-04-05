@@ -112,15 +112,16 @@ const skipInitialMessages = Effect.fn("skipInitialMessages")(
   },
 );
 
-export const callRpc = Effect.fn("callRpc")(
-  function*(ws: WebSocket, method: string, args: unknown[] = [], timeout = 10_000) {
+export const callAgentRpc = Effect.fn("callAgentRpc")(
+  // oxlint-disable-next-line @typescript-eslint/no-inferrable-types -- oxlint sees Effect.fn generator params as any; explicit type prevents no-unsafe-argument on setTimeout
+  function*(ws: WebSocket, method: string, args: unknown[] = [], timeout: number = 10_000) {
     return yield* Effect.promise<RPCResponse>(() => {
       const id = crypto.randomUUID();
       ws.send(JSON.stringify({ type: "rpc", id, method, args }));
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           reject(new Error(`RPC timeout: ${method}`));
-        }, timeout as number);
+        }, timeout);
         const handler = (e: MessageEvent) => {
           const msg = JSON.parse(e.data as string) as RPCResponse;
           if (msg.type === MessageType.RPC && msg.id === id) {
@@ -181,7 +182,7 @@ export const loginAndGetAuth = Effect.fn("loginAndGetAuth")(function*() {
 
 export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(
   function*(ws: WebSocket, invoiceId: string) {
-    return yield* callRpc(ws, "getInvoices", []).pipe(
+    return yield* callAgentRpc(ws, "getInvoices", []).pipe(
       Effect.flatMap((result) => {
         if (!result.success) return Effect.fail(new Error("getInvoices failed"));
         const invoices = Schema.decodeUnknownSync(
