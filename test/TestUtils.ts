@@ -44,7 +44,15 @@ export const workerFetch = Effect.fn("workerFetch")(
   },
 );
 
-export const runServerFn = Effect.fn("runServerFn")(
+/**
+ * Calls a TanStack server function in-process via the Worker's fetch handler.
+ *
+ * Uses `createClientRpc` to serialize args and build the request, then routes
+ * it through `exports.default.fetch` (no network). A stub `runWithStartContext`
+ * provides the minimal AsyncLocalStorage context the server handler expects —
+ * no client or server middleware actually executes.
+ */
+export const callServerFn = Effect.fn("callServerFn")(
   function*<TInputValidator, TResponse>({
     serverFn,
     data,
@@ -152,7 +160,7 @@ export const agentWebSocket = Effect.fn("agentWebSocket")(
 
 export const loginAndGetAuth = Effect.fn("loginAndGetAuth")(function*() {
   yield* resetDb();
-  const result = yield* runServerFn({
+  const result = yield* callServerFn({
     serverFn: login,
     data: { email: "u@u.com" },
   });

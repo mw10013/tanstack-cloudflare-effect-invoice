@@ -4,7 +4,7 @@ import { expect } from "vitest";
 
 import { login } from "@/lib/Login";
 
-import { extractSessionCookie, workerFetch, resetDb, runServerFn } from "../TestUtils";
+import { extractSessionCookie, workerFetch, resetDb, callServerFn } from "../TestUtils";
 
 describe("integration smoke", () => {
   it.effect("renders /login", () =>
@@ -17,7 +17,7 @@ describe("integration smoke", () => {
   it.effect("login → verify magic link → access authenticated route", () =>
     Effect.gen(function*() {
       yield* resetDb();
-      const result = yield* runServerFn({
+      const result = yield* callServerFn({
         serverFn: login,
         data: { email: "u@u.com" },
       });
@@ -51,7 +51,7 @@ describe("integration smoke", () => {
   it.effect("admin login → verify magic link → access admin route", () =>
     Effect.gen(function*() {
       yield* resetDb();
-      const result = yield* runServerFn({
+      const result = yield* callServerFn({
         serverFn: login,
         data: { email: "a@a.com" },
       });
