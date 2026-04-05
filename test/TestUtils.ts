@@ -8,7 +8,7 @@ import { Effect, Option, Schedule } from "effect";
 import * as Schema from "effect/Schema";
 import * as Cookies from "effect/unstable/http/Cookies";
 
-import { login } from "@/lib/Login";
+import { login as loginServerFn } from "@/lib/Login";
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
 
 export type ServerFn<TInputValidator, TResponse> = RequiredFetcher<
@@ -136,13 +136,18 @@ export const callAgentRpc = Effect.fn("callAgentRpc")(
   },
 );
 
+/**
+ * Opens a WebSocket to a Cloudflare Agent as a scoped resource.
+ * The WebSocket is automatically closed when the enclosing Effect scope ends
+ * (e.g. when the `it.effect` test completes).
+ */
 export const agentWebSocket = Effect.fn("agentWebSocket")(
-  function*(orgId: string, sessionCookie: string) {
+  function*(organizationId: string, sessionCookie: string) {
     return yield* Effect.acquireRelease(
       Effect.gen(function*() {
         const res = yield* Effect.promise(() =>
           exports.default.fetch(
-            `http://w/agents/organization-agent/${orgId}`,
+            `http://w/agents/organization-agent/${organizationId}`,
             { headers: { Upgrade: "websocket", Cookie: sessionCookie } },
           )
         );
@@ -158,11 +163,15 @@ export const agentWebSocket = Effect.fn("agentWebSocket")(
   },
 );
 
-export const loginAndGetAuth = Effect.fn("loginAndGetAuth")(function*() {
-  yield* resetDb();
+/**
+ * Performs a full magic-link login flow in-process: requests a magic link,
+ * verifies it, extracts the session cookie, and follows the redirect to
+ * resolve the organizationId.
+ */
+export const login = Effect.fn("login")(function*(email: string) {
   const result = yield* callServerFn({
-    serverFn: login,
-    data: { email: "u@u.com" },
+    serverFn: loginServerFn,
+    data: { email },
   });
   const verifyResponse = yield* workerFetch(result.magicLink ?? "", {
     redirect: "manual",
@@ -175,9 +184,9 @@ export const loginAndGetAuth = Effect.fn("loginAndGetAuth")(function*() {
     ).toString(),
     { headers: { Cookie: sessionCookie } },
   );
-  const orgId = new URL(appResponse.url).pathname.split("/")[2];
-  if (!orgId) return yield* Effect.fail(new Error("Could not extract orgId from redirect URL"));
-  return { sessionCookie, orgId };
+  const organizationId = new URL(appResponse.url).pathname.split("/")[2];
+  if (!organizationId) return yield* Effect.fail(new Error(`Could not extract organizationId from redirect URL: ${appResponse.url}`));
+  return { sessionCookie, organizationId };
 });
 
 export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(

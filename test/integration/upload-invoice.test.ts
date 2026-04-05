@@ -10,7 +10,7 @@ import {
   agentWebSocket,
   callAgentRpc,
   workerFetch,
-  loginAndGetAuth,
+  login,
   pollInvoiceStatus,
 } from "../TestUtils";
 
@@ -29,8 +29,8 @@ const configLayer = Layer.succeedServices(
 layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
   it.effect("upload → queue → workflow → ready invoice", () =>
     Effect.gen(function*() {
-      const { sessionCookie, orgId } = yield* loginAndGetAuth();
-      const ws = yield* agentWebSocket(orgId, sessionCookie);
+      const { sessionCookie, organizationId } = yield* login("upload@test.com");
+      const ws = yield* agentWebSocket(organizationId, sessionCookie);
 
       const uploadResult = yield* callAgentRpc(ws, "uploadInvoice", [
         {
@@ -42,11 +42,11 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       assertTrue(uploadResult.success);
       const { invoiceId } = Schema.decodeUnknownSync(InvoiceIdResult)(uploadResult.result);
 
-      const r2Key = `${orgId}/invoices/${invoiceId}`;
+      const r2Key = `${organizationId}/invoices/${invoiceId}`;
       const head = yield* Effect.promise(() => env.R2.head(r2Key));
       expect(head).not.toBeNull();
       expect(head?.customMetadata?.fileName).toBe("invoice-1-redacted.png");
-      expect(head?.customMetadata?.organizationId).toBe(orgId);
+      expect(head?.customMetadata?.organizationId).toBe(organizationId);
 
       const invoice = yield* pollInvoiceStatus(ws, invoiceId);
       expect(invoice).toBeDefined();
@@ -55,8 +55,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
 
   it.effect("rejects invalid content type", () =>
     Effect.gen(function*() {
-      const { sessionCookie, orgId } = yield* loginAndGetAuth();
-      const ws = yield* agentWebSocket(orgId, sessionCookie);
+      const { sessionCookie, organizationId } = yield* login("invalid-type@test.com");
+      const ws = yield* agentWebSocket(organizationId, sessionCookie);
 
       const result = yield* callAgentRpc(ws, "uploadInvoice", [
         {
@@ -75,8 +75,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
 
   it.effect("rejects base64 exceeding size limit", () =>
     Effect.gen(function*() {
-      const { sessionCookie, orgId } = yield* loginAndGetAuth();
-      const ws = yield* agentWebSocket(orgId, sessionCookie);
+      const { sessionCookie, organizationId } = yield* login("oversize@test.com");
+      const ws = yield* agentWebSocket(organizationId, sessionCookie);
 
       const maxBase64Size = Math.ceil((10_000_000 * 4) / 3) + 4;
       const oversizedBase64 = "A".repeat(maxBase64Size + 1);
@@ -98,8 +98,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
 
   it.effect("enforces invoice limit", () =>
     Effect.gen(function*() {
-      const { sessionCookie, orgId } = yield* loginAndGetAuth();
-      const ws = yield* agentWebSocket(orgId, sessionCookie);
+      const { sessionCookie, organizationId } = yield* login("invoice-limit@test.com");
+      const ws = yield* agentWebSocket(organizationId, sessionCookie);
 
       const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
