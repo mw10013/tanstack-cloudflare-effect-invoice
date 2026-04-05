@@ -2,8 +2,10 @@ import type { ClientFnMeta, RequiredFetcher } from "@tanstack/react-start";
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
 import { env, exports } from "cloudflare:workers";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schedule } from "effect";
 import * as Cookies from "effect/unstable/http/Cookies";
+
+import { login } from "@/lib/Login";
 
 export type ServerFn<TInputValidator, TResponse> = RequiredFetcher<
   undefined,
@@ -77,5 +79,134 @@ export const extractSessionCookie = Effect.fn("extractSessionCookie")(
     if (Option.isNone(token))
       return yield* Effect.fail(new Error("Missing session cookie"));
     return Cookies.toCookieHeader(cookies);
+  },
+);
+
+export interface RpcSuccessResponse {
+  type: "rpc";
+  id: string;
+  success: true;
+  result: unknown;
+  done: boolean;
+}
+
+export interface RpcErrorResponse {
+  type: "rpc";
+  id: string;
+  success: false;
+  error: string;
+}
+
+export type RpcResponse = RpcSuccessResponse | RpcErrorResponse;
+
+const waitForMessage = Effect.fn("waitForMessage")(
+  function*(ws: WebSocket, timeout = 5000) {
+    return yield* Effect.promise<unknown>(() =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("Timeout waiting for WebSocket message"));
+        }, timeout as number);
+        ws.addEventListener(
+          "message",
+          (e: MessageEvent) => {
+            clearTimeout(timer);
+            resolve(JSON.parse(e.data as string));
+          },
+          { once: true },
+        );
+      })
+    );
+  },
+);
+
+const skipInitialMessages = Effect.fn("skipInitialMessages")(
+  function*(ws: WebSocket) {
+    for (let i = 0; i < 3; i++) yield* waitForMessage(ws);
+  },
+);
+
+export const callRpc = Effect.fn("callRpc")(
+  function*(ws: WebSocket, method: string, args: unknown[] = [], timeout = 10_000) {
+    return yield* Effect.promise<RpcResponse>(() => {
+      const id = crypto.randomUUID();
+      ws.send(JSON.stringify({ type: "rpc", id, method, args }));
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`RPC timeout: ${method}`));
+        }, timeout as number);
+        const handler = (e: MessageEvent) => {
+          const msg = JSON.parse(e.data as string) as RpcResponse;
+          if (msg.type === "rpc" && msg.id === id) {
+            if (msg.success && !msg.done) return;
+            clearTimeout(timer);
+            ws.removeEventListener("message", handler);
+            resolve(msg);
+          }
+        };
+        ws.addEventListener("message", handler);
+      });
+    });
+  },
+);
+
+export const agentWebSocket = Effect.fn("agentWebSocket")(
+  function*(orgId: string, sessionCookie: string) {
+    return yield* Effect.acquireRelease(
+      Effect.gen(function*() {
+        const res = yield* Effect.promise(() =>
+          exports.default.fetch(
+            `http://example.com/agents/organization-agent/${orgId}`,
+            { headers: { Upgrade: "websocket", Cookie: sessionCookie } },
+          )
+        );
+        const ws = res.webSocket;
+        if (!ws) return yield* Effect.fail(new Error(`WebSocket upgrade failed: ${String(res.status)}`));
+        ws.accept();
+        yield* skipInitialMessages(ws);
+        return ws;
+      }),
+      (ws) => Effect.sync(() => { ws.close(); }),
+    );
+  },
+);
+
+export const loginAndGetAuth = Effect.fn("loginAndGetAuth")(function*() {
+  yield* resetDb();
+  const result = yield* runServerFn({
+    serverFn: login,
+    data: { email: "u@u.com" },
+  });
+  const verifyResponse = yield* fetchWorker(result.magicLink ?? "", {
+    redirect: "manual",
+  });
+  const sessionCookie = yield* extractSessionCookie(verifyResponse);
+  const appResponse = yield* fetchWorker(
+    new URL(
+      verifyResponse.headers.get("location") ?? "/",
+      result.magicLink,
+    ).toString(),
+    { headers: { Cookie: sessionCookie } },
+  );
+  const orgId = new URL(appResponse.url).pathname.split("/")[2];
+  if (!orgId) return yield* Effect.fail(new Error("Could not extract orgId from redirect URL"));
+  return { sessionCookie, orgId };
+});
+
+export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(
+  function*(ws: WebSocket, invoiceId: string) {
+    return yield* callRpc(ws, "getInvoices", []).pipe(
+      Effect.flatMap((result) => {
+        if (!result.success) return Effect.fail(new Error("getInvoices failed"));
+        const invoices = result.result as { id: string; status: string }[];
+        const inv = invoices.find((i) => i.id === invoiceId);
+        if (inv?.status === "ready" || inv?.status === "error") return Effect.succeed(inv);
+        return Effect.fail(new Error("not ready"));
+      }),
+      Effect.retry(
+        Schedule.spaced("2 seconds").pipe(
+          Schedule.while(({ elapsed }) => elapsed < 60_000),
+        ),
+      ),
+    );
   },
 );
