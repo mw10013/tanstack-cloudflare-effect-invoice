@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
-import { Effect } from "effect";
+import { Effect, Option } from "effect";
 import * as Schema from "effect/Schema";
 
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/select";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
+import { sendMembershipSync } from "@/lib/MembershipSync";
+import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
 const organizationIdSchema = Schema.Struct({ organizationId: Domain.Organization.fields.id });
@@ -100,6 +102,15 @@ const removeMember = createServerFn({ method: "POST" })
       Effect.gen(function* () {
         const request = yield* Request;
         const auth = yield* Auth;
+        const repository = yield* Repository;
+        const member = yield* repository.getMemberById(memberId);
+        if (Option.isSome(member)) {
+          yield* sendMembershipSync({
+            organizationId,
+            userId: member.value.userId,
+            change: "removed",
+          });
+        }
         yield* Effect.tryPromise(() =>
           auth.api.removeMember({
             headers: request.headers,
@@ -120,6 +131,16 @@ const leaveOrganization = createServerFn({ method: "POST" })
       Effect.gen(function* () {
         const request = yield* Request;
         const auth = yield* Auth;
+        const session = yield* Effect.fromNullishOr(
+          yield* Effect.tryPromise(() =>
+            auth.api.getSession({ headers: request.headers }),
+          ),
+        );
+        yield* sendMembershipSync({
+          organizationId,
+          userId: Schema.decodeUnknownSync(Domain.UserId)(session.user.id),
+          change: "removed",
+        });
         yield* Effect.tryPromise(() =>
           auth.api.leaveOrganization({
             headers: request.headers,
@@ -141,6 +162,15 @@ const updateMemberRole = createServerFn({ method: "POST" })
         Effect.gen(function* () {
           const request = yield* Request;
           const auth = yield* Auth;
+          const repository = yield* Repository;
+          const member = yield* repository.getMemberById(memberId);
+          if (Option.isSome(member)) {
+            yield* sendMembershipSync({
+              organizationId,
+              userId: member.value.userId,
+              change: "role_changed",
+            });
+          }
           yield* Effect.tryPromise(() =>
             auth.api.updateMemberRole({
               headers: request.headers,

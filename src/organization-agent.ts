@@ -9,6 +9,7 @@ import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { makeLoggerLayer } from "@/lib/LoggerLayer";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
+import type * as Domain from "@/lib/Domain";
 import type { Invoice } from "@/lib/OrganizationDomain";
 import {
   InvoiceId,
@@ -139,6 +140,10 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       amount text not null default '' check(length(amount) <= 50),
       period text not null default '' check(length(period) <= 50)
     )`;
+    void this.sql`create table if not exists Member (
+      userId text primary key,
+      role text not null
+    )`;
     void this.sql`create index if not exists Invoice_createdAt_idx on Invoice(createdAt)`;
     void this.sql`create index if not exists InvoiceItem_invoiceId_order_idx on InvoiceItem(invoiceId, "order")`;
     this.runEffect = makeRunEffect(ctx, env);
@@ -230,6 +235,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   createInvoice() {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
+        yield* authorizeConnection();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -253,6 +259,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   updateInvoice(input: typeof UpdateInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
+        yield* authorizeConnection();
         const data = yield* Schema.decodeUnknownEffect(UpdateInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
         const invoice = yield* repo.updateInvoice(data).pipe(
@@ -282,7 +289,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
         const data = yield* Schema.decodeUnknownEffect(UploadInvoiceInput)(input);
-        yield* getConnectionIdentity();
+        yield* authorizeConnection();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -341,6 +348,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   deleteInvoice(input: typeof DeleteInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
+        yield* authorizeConnection();
         const { invoiceId } = yield* Schema.decodeUnknownEffect(DeleteInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
         const invoice = yield* repo.findInvoice(invoiceId);
@@ -374,6 +382,27 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       Effect.gen(function* () {
         const repo = yield* OrganizationRepository;
         yield* repo.deleteInvoiceRecord(invoiceId);
+      }),
+    );
+  }
+
+  onMembershipChanged(input: {
+    userId: Domain.UserId;
+    role: Domain.MemberRole;
+    change: "added" | "removed" | "role_changed";
+  }) {
+    return this.runEffect(
+      Effect.gen(function* () {
+        yield* Effect.logInfo("onMembershipChanged", {
+          userId: input.userId,
+          role: input.role,
+          change: input.change,
+          agentName: getCurrentAgent<OrganizationAgent>().agent?.name,
+        });
+        const repo = yield* OrganizationRepository;
+        yield* input.change === "removed"
+          ? repo.deleteMember(input.userId)
+          : repo.upsertMember({ userId: input.userId, role: input.role });
       }),
     );
   }
@@ -440,6 +469,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   getInvoices() {
     return this.runEffect(
       Effect.gen(function* () {
+        yield* authorizeConnection();
         const repo = yield* OrganizationRepository;
         return yield* repo.getInvoices();
       }),
@@ -450,6 +480,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   getInvoice(input: typeof GetInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen(function* () {
+        yield* authorizeConnection();
         const { invoiceId } = yield* Schema.decodeUnknownEffect(GetInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
         return yield* repo.getInvoice(invoiceId).pipe(
@@ -470,6 +501,25 @@ const getConnectionIdentity = Effect.fn("OrganizationAgent.getConnectionIdentity
     if (!agent || !identity?.userId) {
       return yield* new OrganizationAgentError({
         message: "Unauthorized",
+      });
+    }
+    return identity;
+  },
+);
+
+const authorizeConnection = Effect.fn("OrganizationAgent.authorizeConnection")(
+  function* () {
+    const { connection } = getCurrentAgent<OrganizationAgent>();
+    if (!connection) return;
+    const identity = yield* getConnectionIdentity();
+    const repo = yield* OrganizationRepository;
+    const authorized = yield* repo.isMember(identity.userId as Domain.UserId);
+    if (!authorized) {
+      yield* Effect.logWarning("authorizeConnection.forbidden", {
+        userId: identity.userId,
+      });
+      return yield* new OrganizationAgentError({
+        message: `Forbidden: userId=${identity.userId} not in Member table`,
       });
     }
     return identity;

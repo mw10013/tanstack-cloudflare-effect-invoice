@@ -1,6 +1,7 @@
 import { Effect, Layer, Option, Schema, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import type * as Domain from "./Domain";
 import type { InvoiceExtractionSchema } from "./InvoiceExtraction";
 import type { UpdateInvoiceInput } from "./OrganizationAgentSchemas";
 import * as OrganizationDomain from "./OrganizationDomain";
@@ -286,6 +287,28 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         },
       );
 
+      const upsertMember = Effect.fn("OrganizationRepository.upsertMember")(
+        function* (input: { userId: Domain.UserId; role: Domain.MemberRole }) {
+          yield* sql`
+            insert into Member (userId, role) values (${input.userId}, ${input.role})
+            on conflict(userId) do update set role = excluded.role
+          `;
+        },
+      );
+
+      const deleteMember = Effect.fn("OrganizationRepository.deleteMember")(
+        function* (userId: Domain.UserId) {
+          yield* sql`delete from Member where userId = ${userId}`;
+        },
+      );
+
+      const isMember = Effect.fn("OrganizationRepository.isMember")(
+        function* (userId: Domain.UserId) {
+          const rows = yield* sql`select 1 from Member where userId = ${userId}`;
+          return rows.length > 0;
+        },
+      );
+
       return {
         countInvoices,
         findInvoice,
@@ -298,6 +321,9 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
         deleteInvoiceRecord,
         saveInvoiceExtraction,
         setError,
+        upsertMember,
+        deleteMember,
+        isMember,
       };
     }),
   },

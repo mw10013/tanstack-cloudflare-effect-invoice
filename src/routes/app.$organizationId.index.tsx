@@ -5,7 +5,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Option } from "effect";
 import * as Schema from "effect/Schema";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/item";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
+import { sendMembershipSync } from "@/lib/MembershipSync";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
@@ -73,6 +74,19 @@ const acceptInvitation = createServerFn({ method: "POST" })
         Effect.gen(function* () {
           const request = yield* Request;
           const auth = yield* Auth;
+          const repository = yield* Repository;
+          const invitation = yield* repository.getInvitation(invitationId);
+          if (Option.isNone(invitation)) return;
+          const session = yield* Effect.fromNullishOr(
+            yield* Effect.tryPromise(() =>
+              auth.api.getSession({ headers: request.headers }),
+            ),
+          );
+          yield* sendMembershipSync({
+            organizationId: invitation.value.organizationId,
+            userId: Schema.decodeUnknownSync(Domain.UserId)(session.user.id),
+            change: "added",
+          });
           yield* Effect.tryPromise(() =>
             auth.api.acceptInvitation({
               headers: request.headers,

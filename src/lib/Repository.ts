@@ -39,6 +39,28 @@ export class Repository extends ServiceMap.Service<Repository>()("Repository", {
         );
       },
     );
+    const getMemberById = Effect.fn("Repository.getMemberById")(
+      function* (memberId: Domain.Member["id"]) {
+        const result = yield* d1.first(
+          d1.prepare("select * from Member where id = ?1").bind(memberId),
+        );
+        return yield* Effect.fromOption(result).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Domain.Member)),
+          Effect.catchNoSuchElement,
+        );
+      },
+    );
+    const getInvitation = Effect.fn("Repository.getInvitation")(
+      function* (invitationId: Domain.Invitation["id"]) {
+        const result = yield* d1.first(
+          d1.prepare("select * from Invitation where id = ?1").bind(invitationId),
+        );
+        return yield* Effect.fromOption(result).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Domain.Invitation)),
+          Effect.catchNoSuchElement,
+        );
+      },
+    );
     const getOwnerOrganizationByUserId = Effect.fn(
       "Repository.getOwnerOrganizationByUserId",
     )(function* (userId: Domain.User["id"]) {
@@ -591,6 +613,8 @@ select json_object(
     );
     return {
       getUser,
+      getMemberById,
+      getInvitation,
       getMemberByUserAndOrg,
       getOwnerOrganizationByUserId,
       /**

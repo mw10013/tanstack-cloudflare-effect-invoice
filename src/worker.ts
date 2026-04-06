@@ -154,9 +154,19 @@ const invoiceDeleteQueueMessageSchema = Schema.Struct({
   r2ObjectKey: OrganizationDomain.Invoice.fields.r2ObjectKey,
 });
 
+const membershipSyncChangeValues = ["added", "removed", "role_changed"] as const;
+
+export const membershipSyncQueueMessageSchema = Schema.Struct({
+  action: Schema.Literals(["MembershipSync"]),
+  organizationId: Domain.Organization.fields.id,
+  userId: Domain.User.fields.id,
+  change: Schema.Literals(membershipSyncChangeValues),
+});
+
 const queueMessageSchema = Schema.Union([
   r2QueueMessageSchema,
   invoiceDeleteQueueMessageSchema,
+  membershipSyncQueueMessageSchema,
 ]);
 
 const r2ObjectCustomMetadataSchema = Schema.Struct({
@@ -219,6 +229,64 @@ const processInvoiceDelete = Effect.fn("processInvoiceDelete")(function* (
   yield* r2.delete(notification.r2ObjectKey);
 });
 
+const processMembershipSync = Effect.fn("processMembershipSync")(function* (
+  notification: typeof membershipSyncQueueMessageSchema.Type,
+) {
+  yield* Effect.logInfo("processMembershipSync", {
+    organizationId: notification.organizationId,
+    userId: notification.userId,
+    change: notification.change,
+  });
+  const repository = yield* Repository;
+  const d1Member = yield* repository.getMemberByUserAndOrg({
+    userId: notification.userId,
+    organizationId: notification.organizationId,
+  });
+  yield* Effect.logInfo("processMembershipSync.d1Check", {
+    d1MemberFound: Option.isSome(d1Member),
+    change: notification.change,
+  });
+  switch (notification.change) {
+    case "added":
+    case "role_changed": {
+      if (Option.isNone(d1Member)) {
+        return yield* new MembershipSyncNotAlignedError({
+          message: `D1 has no member for userId=${notification.userId} organizationId=${notification.organizationId} (change=${notification.change})`,
+        });
+      }
+      const stub = yield* getOrganizationAgentStub(notification.organizationId);
+      yield* Effect.tryPromise(() =>
+        stub.onMembershipChanged({
+          userId: notification.userId,
+          role: d1Member.value.role,
+          change: notification.change,
+        }),
+      );
+      break;
+    }
+    case "removed": {
+      if (Option.isSome(d1Member)) {
+        return yield* new MembershipSyncNotAlignedError({
+          message: `D1 still has member for userId=${notification.userId} organizationId=${notification.organizationId} (change=removed)`,
+        });
+      }
+      const stub = yield* getOrganizationAgentStub(notification.organizationId);
+      yield* Effect.tryPromise(() =>
+        stub.onMembershipChanged({
+          userId: notification.userId,
+          role: "member",
+          change: "removed",
+        }),
+      );
+    }
+  }
+});
+
+class MembershipSyncNotAlignedError extends Schema.TaggedErrorClass<MembershipSyncNotAlignedError>()(
+  "MembershipSyncNotAlignedError",
+  { message: Schema.String },
+) {}
+
 const processQueueMessage = Effect.fn("processQueueMessage")(function* (
   messageBody: unknown,
 ) {
@@ -229,6 +297,9 @@ const processQueueMessage = Effect.fn("processQueueMessage")(function* (
     }
     case "PutObject": {
       return yield* processInvoiceUpload(notification);
+    }
+    case "MembershipSync": {
+      return yield* processMembershipSync(notification);
     }
   }
 });
@@ -309,8 +380,10 @@ export default {
 
   async queue(batch, env) {
     const envLayer = makeEnvLayer(env);
+    const d1Layer = Layer.provideMerge(D1.layer, envLayer);
+    const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
     const r2Layer = Layer.provideMerge(R2.layer, envLayer);
-    const runtimeLayer = Layer.merge(r2Layer, makeLoggerLayer(env));
+    const runtimeLayer = Layer.mergeAll(r2Layer, repositoryLayer, makeLoggerLayer(env));
     await Effect.forEach(
       // oxlint-disable-next-line unicorn/no-array-method-this-argument -- Effect.forEach is not Array.prototype.forEach
       batch.messages,

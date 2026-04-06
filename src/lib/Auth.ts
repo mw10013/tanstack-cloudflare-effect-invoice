@@ -38,10 +38,11 @@ export class Auth extends ServiceMap.Service<Auth>()("Auth", {
       transactionalEmail: Config.nonEmptyString("TRANSACTIONAL_EMAIL"),
       stripeWebhookSecret: Config.redacted("STRIPE_WEBHOOK_SECRET"),
     });
-    const { D1: database } = yield* CloudflareEnv;
+    const { D1: database, Q: queue } = yield* CloudflareEnv;
 
     const auth = makeAuth({
       database,
+      queue,
       stripeClient: stripe.stripe,
       runEffect,
       ...authConfig,
@@ -70,6 +71,7 @@ export class Auth extends ServiceMap.Service<Auth>()("Auth", {
 
 const makeAuth = ({
   database,
+  queue,
   stripeClient,
   runEffect,
   betterAuthUrl,
@@ -78,6 +80,7 @@ const makeAuth = ({
   stripeWebhookSecret,
 }: {
   database: D1Database;
+  queue: Queue;
   stripeClient: StripeTypes;
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, KV | Stripe | Repository>,
@@ -142,12 +145,20 @@ const makeAuth = ({
                   userId: user.id,
                   organizationId: org.id,
                 });
+                const organizationId = Schema.decodeUnknownSync(Domain.OrganizationId)(org.id);
+                const userId = Schema.decodeUnknownSync(Domain.UserId)(user.id);
                 yield* repository.initializeActiveOrganizationForUserSessions({
-                  organizationId: Schema.decodeUnknownSync(Domain.OrganizationId)(
-                    org.id,
-                  ),
-                  userId: Schema.decodeUnknownSync(Domain.UserId)(user.id),
+                  organizationId,
+                  userId,
                 });
+                yield* Effect.tryPromise(() =>
+                  queue.send({
+                    action: "MembershipSync" as const,
+                    organizationId,
+                    userId,
+                    change: "added" as const,
+                  }),
+                );
               }),
             ),
         },
