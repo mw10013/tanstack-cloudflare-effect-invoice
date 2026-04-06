@@ -23,6 +23,7 @@ export default defineConfig(async () => {
     root: rootDir,
     plugins: [
       cloudflareTest({
+        main: "./src/test-worker.ts",
         remoteBindings: false,
         wrangler: {
           configPath: path.join(rootDir, "wrangler.jsonc"),

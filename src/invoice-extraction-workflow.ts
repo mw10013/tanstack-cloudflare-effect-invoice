@@ -3,6 +3,7 @@ import type { AgentWorkflowEvent, AgentWorkflowStep } from "agents/workflows";
 import type { OrganizationAgent } from "./organization-agent";
 
 import { AgentWorkflow } from "agents/workflows";
+import type { Config } from "effect";
 import { ConfigProvider, Effect, Layer, Option, Schema, ServiceMap } from "effect";
 import * as Encoding from "effect/Encoding";
 import * as Result from "effect/Result";
@@ -36,14 +37,7 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
   InvoiceExtractionWorkflowParams,
   Pick<ActivityMessage, "action" | "level" | "text">
 > {
-  async run(
-    event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
-    step: AgentWorkflowStep,
-  ) {
-    // Capture instance state before entering nested Effect / step callback boundaries.
-    const agent = this.agent;
-    const reportActivity = (progress: Pick<ActivityMessage, "action" | "level" | "text">) =>
-      Effect.tryPromise(() => this.reportProgress(progress));
+  protected makeRuntimeLayer(): Layer.Layer<R2 | InvoiceExtraction, Config.ConfigError> {
     const envLayer = Layer.succeedServices(
       ServiceMap.make(CloudflareEnv, this.env).pipe(
         ServiceMap.add(
@@ -57,7 +51,17 @@ export class InvoiceExtractionWorkflow extends AgentWorkflow<
       InvoiceExtraction.layer,
       Layer.merge(envLayer, FetchHttpClient.layer),
     );
-    const runtimeLayer = Layer.merge(r2Layer, invoiceExtractionLayer);
+    return Layer.merge(r2Layer, invoiceExtractionLayer);
+  }
+
+  async run(
+    event: AgentWorkflowEvent<InvoiceExtractionWorkflowParams>,
+    step: AgentWorkflowStep,
+  ) {
+    const agent = this.agent;
+    const reportActivity = (progress: Pick<ActivityMessage, "action" | "level" | "text">) =>
+      Effect.tryPromise(() => this.reportProgress(progress));
+    const runtimeLayer = this.makeRuntimeLayer();
 
     return Effect.runPromise(
       Effect.gen(function* () {
