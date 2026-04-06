@@ -2,12 +2,14 @@ import { env } from "cloudflare:workers";
 import { Config, ConfigProvider, Effect, Layer, Schedule, ServiceMap } from "effect";
 import * as Schema from "effect/Schema";
 import { layer } from "@effect/vitest";
-import { assertFalse, assertInclude, assertTrue } from "@effect/vitest/utils";
+import { assertInclude } from "@effect/vitest/utils";
 import { expect } from "vitest";
 
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
 import {
   agentWebSocket,
+  assertAgentRpcFailure,
+  assertAgentRpcSuccess,
   callAgentRpc,
   workerFetch,
   login,
@@ -39,7 +41,7 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
           base64: env.TEST_INVOICE_PNG_BASE64,
         },
       ]);
-      assertTrue(uploadResult.success);
+      assertAgentRpcSuccess(uploadResult);
       const { invoiceId } = Schema.decodeUnknownSync(InvoiceIdResult)(uploadResult.result);
 
       const r2Key = `${organizationId}/invoices/${invoiceId}`;
@@ -66,11 +68,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
         },
       ]);
 
-      assertFalse(result.success);
-      const errorResult = Schema.decodeUnknownSync(
-        Schema.Struct({ success: Schema.Literal(false), error: Schema.String }),
-      )(result);
-      assertInclude(errorResult.error, "Invalid file type");
+      assertAgentRpcFailure(result);
+      assertInclude(result.error, "Invalid file type");
     }));
 
   it.effect("rejects base64 exceeding size limit", () =>
@@ -89,11 +88,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
         },
       ]);
 
-      assertFalse(result.success);
-      const errorResult = Schema.decodeUnknownSync(
-        Schema.Struct({ success: Schema.Literal(false), error: Schema.String }),
-      )(result);
-      assertInclude(errorResult.error, "File too large");
+      assertAgentRpcFailure(result);
+      assertInclude(result.error, "File too large");
     }));
 
   it.effect("enforces invoice limit", () =>
@@ -107,7 +103,7 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       yield* Effect.repeat(
         Effect.gen(function*() {
           const result = yield* callAgentRpc(ws, "createInvoice", []);
-          assertTrue(result.success);
+          assertAgentRpcSuccess(result);
         }),
         Schedule.recurs(invoiceLimit - 1),
       );
@@ -120,11 +116,8 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
         },
       ]);
 
-      assertFalse(result.success);
-      const errorResult = Schema.decodeUnknownSync(
-        Schema.Struct({ success: Schema.Literal(false), error: Schema.String }),
-      )(result);
-      assertInclude(errorResult.error, "Invoice limit");
+      assertAgentRpcFailure(result);
+      assertInclude(result.error, "Invoice limit");
     }));
 
   it.effect("rejects WebSocket upgrade without session cookie", () =>

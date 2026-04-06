@@ -3,6 +3,7 @@ import type { RPCResponse } from "agents";
 import type { ClientFnMeta, RequiredFetcher } from "@tanstack/react-start";
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
+import { assertFalse, assertTrue } from "@effect/vitest/utils";
 import { env, exports } from "cloudflare:workers";
 import { Effect, Option, Schedule } from "effect";
 import * as Schema from "effect/Schema";
@@ -209,3 +210,16 @@ export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(
     );
   },
 );
+
+export function assertAgentRpcSuccess(
+  response: RPCResponse,
+): asserts response is RPCResponse & { success: true } {
+  assertTrue(response.success, `RPC failed: ${"error" in response ? response.error : "unknown"}`);
+}
+
+export function assertAgentRpcFailure(
+  response: RPCResponse,
+): asserts response is RPCResponse & { success: false } {
+  assertFalse(response.success);
+}
+
