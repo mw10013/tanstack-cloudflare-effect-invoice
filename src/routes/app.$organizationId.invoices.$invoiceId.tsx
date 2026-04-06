@@ -6,7 +6,7 @@ import {
   Link,
   notFound,
   useHydrated,
-  useRouter,
+  useNavigate,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { Effect } from "effect";
@@ -67,7 +67,7 @@ function RouteComponent() {
   const { organizationId } = Route.useParams();
   const { invoice, viewUrl } = Route.useLoaderData();
   const isHydrated = useHydrated();
-  const router = useRouter();
+  const navigate = useNavigate({ from: Route.fullPath });
   const { stub } = useOrganizationAgent();
 
   const defaultValues = {
@@ -80,7 +80,11 @@ function RouteComponent() {
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- oxlint can't resolve Cloudflare Rpc conditional types; tsc infers correctly
       stub.updateInvoice({ invoiceId: invoice.id, ...data }),
     onSuccess: () => {
-      void router.invalidate();
+      void navigate({
+        to: "/app/$organizationId/invoices",
+        params: { organizationId },
+        search: { selectedInvoiceId: invoice.id },
+      });
     },
   });
 
@@ -360,4 +364,3 @@ function RouteComponent() {
     </div>
   );
 }
-
