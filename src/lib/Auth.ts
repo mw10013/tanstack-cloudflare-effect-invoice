@@ -146,8 +146,8 @@ const makeAuth = ({
                   userId: user.id,
                   organizationId: org.id,
                 });
-                const organizationId = Schema.decodeUnknownSync(Domain.OrganizationId)(org.id);
-                const userId = Schema.decodeUnknownSync(Domain.UserId)(user.id);
+                const organizationId = Schema.decodeUnknownSync(Domain.Organization.fields.id)(org.id);
+                const userId = Schema.decodeUnknownSync(Domain.User.fields.id)(user.id);
                 yield* repository.initializeActiveOrganizationForUserSessions({
                   organizationId,
                   userId,
@@ -178,7 +178,7 @@ const makeAuth = ({
                 const repository = yield* Repository;
                 const activeOrganization =
                   yield* repository.getOwnerOrganizationByUserId(
-                    Schema.decodeUnknownSync(Domain.UserId)(session.userId),
+                    Schema.decodeUnknownSync(Domain.User.fields.id)(session.userId),
                   );
                 return {
                   data: {
@@ -309,9 +309,9 @@ const makeAuth = ({
               Effect.gen(function* () {
                 const repository = yield* Repository;
                 const member = yield* repository.getMemberByUserAndOrg({
-                  userId: Schema.decodeUnknownSync(Domain.UserId)(user.id),
+                  userId: Schema.decodeUnknownSync(Domain.User.fields.id)(user.id),
                   organizationId: Schema.decodeUnknownSync(
-                    Domain.OrganizationId,
+                    Domain.Organization.fields.id,
                   )(referenceId),
                 });
                 const result =

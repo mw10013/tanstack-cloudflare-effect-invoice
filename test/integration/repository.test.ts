@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { Effect, Layer, Option, ServiceMap } from "effect";
+import * as Schema from "effect/Schema";
 import { layer } from "@effect/vitest";
 import { expect } from "vitest";
 
@@ -21,7 +22,7 @@ const seedUser = Effect.fn("seed.user")(function* (overrides?: {
   stripeCustomerId?: Domain.User["stripeCustomerId"];
 }) {
   const d1 = yield* D1;
-  const id = overrides?.id ?? Domain.UserId.makeUnsafe(crypto.randomUUID());
+  const id = overrides?.id ?? Schema.decodeUnknownSync(Domain.User.fields.id)(crypto.randomUUID());
   const email = overrides?.email ?? `${id}@test.com`;
   const stripeCustomerId = overrides?.stripeCustomerId ?? null;
   yield* d1.run(
@@ -45,7 +46,7 @@ const seedOrganization = Effect.fn("seed.organization")(function* (overrides?: {
   slug?: Domain.Organization["slug"];
 }) {
   const d1 = yield* D1;
-  const id = overrides?.id ?? Domain.OrganizationId.makeUnsafe(crypto.randomUUID());
+  const id = overrides?.id ?? Schema.decodeUnknownSync(Domain.Organization.fields.id)(crypto.randomUUID());
   yield* d1.run(
     d1.prepare(
       "insert into Organization (id, name, slug) values (?1, ?2, ?3)",
@@ -64,7 +65,7 @@ const seedMember = Effect.fn("seed.member")(function* ({
   role: Domain.MemberRole;
 }) {
   const d1 = yield* D1;
-  const id = Domain.MemberId.makeUnsafe(crypto.randomUUID());
+  const id = Schema.decodeUnknownSync(Domain.Member.fields.id)(crypto.randomUUID());
   yield* d1.run(
     d1.prepare(
       "insert into Member (id, userId, organizationId, role) values (?1, ?2, ?3, ?4)",
@@ -83,7 +84,7 @@ const seedSession = Effect.fn("seed.session")(function* ({
   activeOrganizationId?: Domain.Session["activeOrganizationId"];
 }) {
   const d1 = yield* D1;
-  const id = Domain.SessionId.makeUnsafe(crypto.randomUUID());
+  const id = Schema.decodeUnknownSync(Domain.Session.fields.id)(crypto.randomUUID());
   const token = crypto.randomUUID();
   yield* d1.run(
     d1.prepare(
@@ -107,7 +108,7 @@ const seedInvitation = Effect.fn("seed.invitation")(function* ({
   status: Domain.InvitationStatus;
 }) {
   const d1 = yield* D1;
-  const id = Domain.InvitationId.makeUnsafe(crypto.randomUUID());
+  const id = Schema.decodeUnknownSync(Domain.Invitation.fields.id)(crypto.randomUUID());
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 604_800_000).toISOString();
   yield* d1.run(
@@ -130,7 +131,7 @@ const seedSubscription = Effect.fn("seed.subscription")(function* ({
   plan?: Domain.Subscription["plan"];
 }) {
   const d1 = yield* D1;
-  const id = Domain.SubscriptionId.makeUnsafe(crypto.randomUUID());
+  const id = Schema.decodeUnknownSync(Domain.Subscription.fields.id)(crypto.randomUUID());
   yield* d1.run(
     d1.prepare(
       "insert into Subscription (id, plan, referenceId, stripeCustomerId, status, cancelAtPeriodEnd) values (?1, ?2, ?3, ?4, ?5, 0)",
@@ -180,7 +181,7 @@ layer(repositoryLayer)("Repository", (it) => {
       yield* seedMember({ userId: user.id, organizationId: org.id, role: "member" });
       const result = yield* repo.getMemberByUserAndOrg({
         userId: user.id,
-        organizationId: Domain.OrganizationId.makeUnsafe("nonexistent"),
+        organizationId: Schema.decodeUnknownSync(Domain.Organization.fields.id)("nonexistent"),
       });
       expect(Option.isNone(result)).toBe(true);
     }));

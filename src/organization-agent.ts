@@ -491,7 +491,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   onMembershipChanged(input: {
-    userId: Domain.UserId;
+    userId: Domain.User["id"];
     role: Domain.MemberRole;
     change: "added" | "removed" | "role_changed";
   }) {
@@ -622,7 +622,7 @@ const authorizeConnection = Effect.fn("OrganizationAgent.authorizeConnection")(
     if (!connection) return;
     const identity = yield* getConnectionIdentity();
     const repo = yield* OrganizationRepository;
-    const authorized = yield* repo.isMember(identity.userId as Domain.UserId);
+    const authorized = yield* repo.isMember(identity.userId as Domain.User["id"]);
     if (!authorized) {
       yield* Effect.logWarning("authorizeConnection.forbidden", {
         userId: identity.userId,

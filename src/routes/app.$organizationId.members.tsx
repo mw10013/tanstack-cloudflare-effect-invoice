@@ -138,7 +138,7 @@ const leaveOrganization = createServerFn({ method: "POST" })
         );
         yield* sendMembershipSync({
           organizationId,
-          userId: Schema.decodeUnknownSync(Domain.UserId)(session.user.id),
+          userId: Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id),
           change: "removed",
         });
         yield* Effect.tryPromise(() =>

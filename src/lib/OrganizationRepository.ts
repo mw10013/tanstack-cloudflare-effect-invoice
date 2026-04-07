@@ -288,7 +288,7 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const upsertMember = Effect.fn("OrganizationRepository.upsertMember")(
-        function* (input: { userId: Domain.UserId; role: Domain.MemberRole }) {
+        function* (input: { userId: Domain.User["id"]; role: Domain.MemberRole }) {
           yield* sql`
             insert into Member (userId, role) values (${input.userId}, ${input.role})
             on conflict(userId) do update set role = excluded.role
@@ -297,13 +297,13 @@ export class OrganizationRepository extends ServiceMap.Service<OrganizationRepos
       );
 
       const deleteMember = Effect.fn("OrganizationRepository.deleteMember")(
-        function* (userId: Domain.UserId) {
+        function* (userId: Domain.User["id"]) {
           yield* sql`delete from Member where userId = ${userId}`;
         },
       );
 
       const isMember = Effect.fn("OrganizationRepository.isMember")(
-        function* (userId: Domain.UserId) {
+        function* (userId: Domain.User["id"]) {
           const rows = yield* sql`select 1 from Member where userId = ${userId}`;
           return rows.length > 0;
         },

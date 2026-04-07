@@ -84,7 +84,7 @@ const acceptInvitation = createServerFn({ method: "POST" })
           );
           yield* sendMembershipSync({
             organizationId: invitation.value.organizationId,
-            userId: Schema.decodeUnknownSync(Domain.UserId)(session.user.id),
+            userId: Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id),
             change: "added",
           });
           yield* Effect.tryPromise(() =>

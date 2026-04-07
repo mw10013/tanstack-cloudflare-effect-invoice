@@ -64,7 +64,7 @@ const getLoaderData = createServerFn({ method: "GET" })
   .inputValidator(
     Schema.toStandardSchemaV1(
       Schema.Struct({
-        organizationId: Domain.OrganizationId,
+        organizationId: Domain.Organization.fields.id,
         selectedInvoiceId: Schema.optional(Schema.String),
       }),
     ),

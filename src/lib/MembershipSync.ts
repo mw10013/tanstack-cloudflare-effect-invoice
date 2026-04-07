@@ -5,8 +5,8 @@ import type * as Domain from "@/lib/Domain";
 
 export const sendMembershipSync = Effect.fn("sendMembershipSync")(
   function* (input: {
-    organizationId: Domain.OrganizationId;
-    userId: Domain.UserId;
+    organizationId: Domain.Organization["id"];
+    userId: Domain.User["id"];
     change: "added" | "removed" | "role_changed";
   }) {
     const env = yield* CloudflareEnv;

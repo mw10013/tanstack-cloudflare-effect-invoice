@@ -47,7 +47,9 @@ import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const organizationIdSchema = Schema.Struct({ organizationId: Domain.OrganizationId });
+const organizationIdSchema = Schema.Struct({
+  organizationId: Domain.Organization.fields.id,
+});
 
 const splitEmails = (value: string) =>
   value
@@ -135,7 +137,7 @@ function RouteComponent() {
 }
 
 const inviteSchema = Schema.Struct({
-  organizationId: Domain.OrganizationId,
+  organizationId: Domain.Organization.fields.id,
   emails: Schema.String.pipe(
     Schema.decodeTo(
       Schema.Array(Schema.String.check(Schema.isPattern(emailPattern)))
@@ -185,7 +187,7 @@ const invite = createServerFn({ method: "POST" })
                 invitationId: result.id,
               });
               yield* repository.updateInvitationRole({
-                invitationId: Schema.decodeUnknownSync(Domain.InvitationId)(
+                invitationId: Schema.decodeUnknownSync(Domain.Invitation.fields.id)(
                   result.id,
                 ),
                 role,
