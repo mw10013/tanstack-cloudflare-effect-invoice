@@ -12,6 +12,7 @@ import {
   Effect,
   Layer,
   Option,
+  Predicate,
 } from "effect";
 import * as Schema from "effect/Schema";
 
@@ -27,7 +28,6 @@ import {
 import {
   Invoice as InvoiceSchema,
   InvoiceId,
-  InvoiceIdempotencyKey,
   InvoiceLimitExceededError,
   OrganizationAgentError,
   activeWorkflowStatuses,
@@ -48,7 +48,9 @@ const MAX_BASE64_SIZE = Math.ceil((10_000_000 * 4) / 3) + 4;
 const r2ObjectCustomMetadataSchema = Schema.Struct({
   organizationId: Schema.NonEmptyString,
   invoiceId: InvoiceId,
-  idempotencyKey: InvoiceIdempotencyKey,
+  idempotencyKey: InvoiceSchema.fields.idempotencyKey.pipe(
+    Schema.refine(Predicate.isNotNull),
+  ),
   fileName: InvoiceSchema.fields.fileName.check(Schema.isNonEmpty()),
   contentType: InvoiceSchema.fields.contentType.check(Schema.isNonEmpty()),
 });
