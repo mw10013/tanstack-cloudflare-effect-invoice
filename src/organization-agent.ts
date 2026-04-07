@@ -3,7 +3,7 @@ import type { Connection, ConnectionContext } from "agents";
 import type { ActivityMessage } from "@/lib/Activity";
 import type * as Domain from "@/lib/Domain";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
-import type { Invoice as InvoiceRecord } from "@/lib/OrganizationDomain";
+import type { Invoice } from "@/lib/OrganizationDomain";
 
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Agent, callable, getCurrentAgent } from "agents";
@@ -193,7 +193,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
    * row without an active workflow is retried to recover from partial failures.
    */
   onInvoiceUpload(upload: {
-    r2ObjectKey: InvoiceRecord["r2ObjectKey"];
+    r2ObjectKey: Invoice["r2ObjectKey"];
     r2ActionTime: string;
   }) {
     return this.runEffect(
@@ -477,8 +477,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
    * R2 object for eventual consistency of storage cleanup.
    */
   onDeleteInvoice(input: {
-    invoiceId: InvoiceRecord["id"];
-    r2ObjectKey: InvoiceRecord["r2ObjectKey"];
+    invoiceId: Invoice["id"];
+    r2ObjectKey: Invoice["r2ObjectKey"];
   }) {
     return this.runEffect(
       Effect.gen(function* () {
@@ -513,7 +513,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   saveInvoiceExtraction(input: {
-    invoiceId: InvoiceRecord["id"];
+    invoiceId: Invoice["id"];
     idempotencyKey: string;
     extractedInvoice: typeof InvoiceExtractionSchema.Type;
     extractedJson: string;
