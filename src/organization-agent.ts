@@ -164,8 +164,10 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   /**
    * Handles Cloudflare R2 `PutObject` event notifications forwarded from the queue consumer.
    *
-   * Queue delivery is at-least-once, so this uses `idempotencyKey` and existing invoice state
-   * to no-op duplicate notifications and only start extraction once per upload.
+   * Queue delivery is at-least-once, so dedupe uses three guards:
+   * stale `r2ActionTime` is ignored, active workflow instances are ignored, and
+   * same-key terminal rows (`ready`/`error`) are ignored. A same-key `extracting`
+   * row without an active workflow is retried to recover from partial failures.
    */
   onInvoiceUpload(upload: {
     invoiceId: Invoice["id"];
@@ -201,7 +203,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           Option.isSome(existing) &&
           existing.value.idempotencyKey !== null &&
           existing.value.idempotencyKey === upload.idempotencyKey &&
-          existing.value.r2ActionTime !== null
+          (existing.value.status === "ready" || existing.value.status === "error")
         )
           return;
         const name = upload.fileName.replace(/\.[^.]+$/, "");
@@ -286,8 +288,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
    *   ran (possible because r2.put yields the event loop), the existing
    *   "extracting" row is preserved and the insert is a no-op.
    * - {@link onInvoiceUpload} handles a pre-existing "uploading" row correctly —
-   *   idempotency dedupe only applies after `r2ActionTime` is set, so it still
-   *   upserts to "extracting" and starts the workflow for the first notification.
+   *   dedupe skips only active workflow or terminal states, so first delivery and
+   *   recoverable retries can still upsert to "extracting" and start extraction.
    */
   @callable()
   uploadInvoice(input: typeof UploadInvoiceInput.Type) {
