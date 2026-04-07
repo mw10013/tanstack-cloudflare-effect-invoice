@@ -17,6 +17,9 @@ export const InvoiceItemId = Schema.NonEmptyString.pipe(
 );
 export type InvoiceItemId = typeof InvoiceItemId.Type;
 
+export const InvoiceIdempotencyKey = Schema.NonEmptyString;
+export type InvoiceIdempotencyKey = typeof InvoiceIdempotencyKey.Type;
+
 export const Invoice = Schema.Struct({
   id: InvoiceId,
   name: Schema.String.check(Schema.isMaxLength(500)),
@@ -24,7 +27,7 @@ export const Invoice = Schema.Struct({
   contentType: Schema.String.check(Schema.isMaxLength(100)),
   createdAt: Schema.Number,
   r2ActionTime: Schema.NullOr(Schema.Number),
-  idempotencyKey: Schema.NullOr(Schema.String),
+  idempotencyKey: Schema.NullOr(InvoiceIdempotencyKey),
   r2ObjectKey: Schema.String,
   status: InvoiceStatus,
   invoiceConfidence: Schema.Number,

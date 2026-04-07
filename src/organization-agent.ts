@@ -7,7 +7,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { ActivityMessage } from "@/lib/Activity";
 import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
-import { makeLoggerLayer } from "@/lib/LoggerLayer";
+import { makeLoggerLayer } from "@/lib/LayerEx";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
 import type * as Domain from "@/lib/Domain";
 import type { Invoice } from "@/lib/OrganizationDomain";
