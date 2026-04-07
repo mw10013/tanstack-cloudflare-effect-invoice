@@ -2,263 +2,287 @@
 
 ## TL;DR
 
-- We have to use Better Auth APIs for the writes that create auth, organization, and membership state.
-- We should assume any Better Auth API call can fail after partially succeeding.
-- That means blind retries are unsafe.
-- The viable solution is not atomicity. The viable solution is convergence.
-- Convergence here means: after any failure, re-read authoritative D1 state, decide what is still missing, and continue from the first unmet invariant.
-- The DO-local `Member` table cannot be authoritative. It has to be a repairable projection of D1.
-- A background reconciler is required, because [src/lib/Auth.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/Auth.ts#L121-L191) starts bootstrap from a post-commit Better Auth hook, so the trigger itself can be lost.
+- Assume the required Better Auth calls are discrete, can fail independently, and are not idempotent.
+- Therefore the only viable design is a single bootstrap owner that runs synchronously at the auth boundary.
+- Do not let the user into the app until bootstrap invariants are true.
+- Do not depend on a background reconciler for immediate correctness.
+- After any ambiguous failure, do not blindly retry writes. Read current durable state first, then continue from the first unmet invariant.
+- Queue and Durable Object updates are projection work. They cannot be allowed to decide whether the account is usable.
 
-## Current Failure
+## First-Principles Constraints
 
-Current bootstrap logic in [src/lib/Auth.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/Auth.ts#L121-L191):
+We need a workflow that turns:
 
-1. Better Auth creates the user.
-2. `databaseHooks.user.create.after` runs.
-3. It calls `organizationApiCreate(...)`.
-4. It backfills `activeOrganizationId` for sessions.
-5. It sends `MembershipSync` to the queue.
+1. authenticated user
 
-Observed failure in [src/organization-agent.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/organization-agent.ts#L510-L527):
+into:
 
-```txt
-Forbidden: userId=... not in Member table
-```
+1. authenticated user
+2. organization exists
+3. owner membership exists
+4. active organization is set
+5. app authorization works
 
-That happens because D1 can already contain the org and owner membership while the DO-local cache has not been updated yet.
+The hard constraints are:
 
-The current queue consumer in [src/worker.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/worker.ts#L232-L285) already treats D1 as truth before updating the DO:
+- the Better Auth calls are separate calls
+- any one of them can fail
+- a failure may happen after the side effect already committed
+- immediate success matters; this cannot be left to eventual repair later
+- if the user gets into the app before bootstrap completes, the system is broken
 
-```ts
-const d1Member = yield* repository.getMemberByUserAndOrg({
-  userId: notification.userId,
-  organizationId: notification.organizationId,
-});
-```
+Those constraints eliminate a lot of fake solutions.
 
-That is the right instinct. The problem is that authorization still treats the DO cache as authoritative.
+## What Is Not Good Enough
 
-## Constraints
+## Not a background reconciler
 
-These are the constraints that matter:
+A periodic background scanner is not the primary solution.
 
-- We must use Better Auth APIs for the writes.
-- Better Auth organization and membership writes are separate API calls, not one atomic bootstrap call.
-- Any Better Auth API call can fail after side effects.
-- The first session may already exist before the org exists, so session state needs repair.
-- Queue publish can fail.
-- Queue delivery can lag.
-- DO state can be stale.
+Reason:
 
-Those constraints rule out a simple transactional solution.
+- if the user is authenticated but not provisioned, the app is already unusable
+- waiting for some future repair cycle is too late
 
-## What Has To Be True
+A repair path can exist as a safety net, but it cannot be the thing that makes bootstrap work.
 
-The bootstrap is done when these invariants are true in source-of-truth order:
+## Not queue-first correctness
 
-1. The user has an owner organization in D1.
-2. Sessions for that user have `activeOrganizationId` set.
-3. The organization DO can authorize the user, either because the local `Member` row is present or because it can be repaired from D1.
-4. The system can resume from crashes without guessing whether a previous Better Auth call already succeeded.
+Queues are useful for projection and retry.
 
-If the workflow always moves toward these invariants, then it is fault tolerant enough even without atomic cross-system commit.
+Queues are not good enough for immediate correctness because:
 
-## Recommended Solution
+- delivery is asynchronous
+- lag is normal
+- retries are normal
+- duplicates are normal
 
-## Use Better Auth For Writes, D1 For Reconciliation
+If the first usable request depends on a queue having already run, the design is brittle.
 
-The practical pattern is:
+## Not free-floating API calls
 
-1. Use Better Auth APIs for writes.
-2. Use D1 reads to check what already exists.
-3. After any uncertain failure, re-read D1 before deciding whether to retry.
-4. Never retry a Better Auth write blindly.
+The Better Auth calls cannot be scattered across random hooks, page loads, or route handlers.
 
-This is the key point.
+If login is one call, create organization is another, and set active organization is another, then one thing must own that chain.
 
-If `createOrganization()` throws, the next move should not be "call `createOrganization()` again". The next move should be "check D1 and see whether the org and owner member already exist".
+Without one owner, there is no place to reason about retries, partial success, or completion.
 
-## Convergent Bootstrap Orchestrator
+## The Correct Owner
 
-The bootstrap runner should evaluate invariants step by step.
+From first principles, the correct owner is:
 
-Each step should follow this shape:
+> the boundary that converts "user has authenticated" into "user may enter the app"
 
-1. Read D1.
-2. If the invariant is already true, skip the write.
-3. If the invariant is false, perform exactly one write action.
-4. Re-read D1.
-5. If the invariant is now true, continue.
-6. If the invariant is still false or the result is unclear, retry later.
+That boundary must synchronously own bootstrap.
 
-That gives us safe recovery from ambiguous failures.
+In practice, that means the auth callback or post-login handoff path, not some later page and not some best-effort background process.
 
-## Concrete Step Logic
+The flow should be:
 
-## Step 1: Ensure the owner organization exists
+1. authenticate user
+2. enter bootstrap owner
+3. finish or verify provisioning
+4. only then redirect to app
 
-Use D1 to check whether the user already owns an org. The existing helper in [src/lib/Repository.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/Repository.ts#L64-L79) already does this:
+If bootstrap cannot be completed, the user should stay on a dedicated "setting up your account" or error state, not proceed into the app.
 
-```ts
-select o.* from Organization o where o.id in (
-  select organizationId from Member where userId = ?1 and role = 'owner'
-)
-```
+## Required Invariants
 
-Algorithm:
+Bootstrap is complete only when all of these are true:
 
-1. Query D1 for an owner org by `userId`.
-2. If found, use it.
-3. If not found, call Better Auth `createOrganization(...)`.
-4. If that call succeeds, re-read D1 and get the org.
-5. If that call fails or times out, re-read D1 before retrying.
-6. Only call `createOrganization(...)` again if D1 still shows no owner org.
+1. user exists
+2. account exists if the login method requires one
+3. exactly one intended organization exists for bootstrap purposes
+4. owner membership exists for that user in that organization
+5. active organization is set for the session, or equivalent app state is ready
+6. the app can authorize the user immediately after redirect
 
-This is safe even if `createOrganization(...)` is non-idempotent, because the retry decision is based on D1, not on the exception alone.
+These invariants define completion. API success responses do not.
 
-## Step 2: Ensure session active organization is set
+## Core Design Rule
 
-This is already implemented as an idempotent D1 repair in [src/lib/Repository.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/Repository.ts#L81-L106):
+The workflow must be:
 
-```ts
-update Session
-set activeOrganizationId = ?1
-where userId = ?2 and activeOrganizationId is null
-```
+> verify state, do one write, verify state again
 
-Keep this shape.
+That is the only safe pattern when writes may have ambiguous outcomes.
 
-It is good because:
+## Bootstrap State Machine
 
-- it is idempotent
-- it only repairs missing session state
-- it does not overwrite later user choices
+Use a single bootstrap runner with this shape:
 
-## Step 3: Ensure membership projection reaches the DO
+1. Read current durable state.
+2. Find the first unmet invariant.
+3. Perform exactly one write aimed at that invariant.
+4. Read durable state again.
+5. Repeat until all invariants are true.
+6. Only then let the user enter the app.
 
-After D1 confirms the membership exists, send `MembershipSync` as best effort.
+This is a convergent state machine.
 
-Current send logic is in [src/lib/MembershipSync.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/MembershipSync.ts#L6-L20).
+It does not assume any call is idempotent.
+It only assumes we can observe durable truth after each step.
 
-This queue send should not be treated as required for correctness. It should be treated as a fast path.
+## Safe Retry Rule
 
-If queue send fails, the system still has enough information in D1 to repair later.
+If a write call fails, times out, or returns an ambiguous result:
 
-## The Critical Change: Read-Repair In Auth
+1. do not retry immediately
+2. read current durable state
+3. if the target invariant is now true, continue
+4. if the target invariant is still false, retry the next write
 
-The current fatal flaw is that [src/organization-agent.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/organization-agent.ts#L510-L527) does this:
+This avoids double-creating or double-mutating when an API call succeeded but the caller did not observe success.
 
-1. check DO-local `Member`
-2. fail if missing
+## The Necessary Read Side
 
-That should become:
+This architecture only works if we have a reliable way to observe durable truth.
 
-1. check DO-local `Member`
-2. if found, continue
-3. if missing, query D1 membership
-4. if D1 says the user is a member, seed or repair the local DO `Member` row and continue
-5. only fail if D1 also says the user is not a member
+For each write step, we need a corresponding read that can answer questions like:
 
-This is the single most important runtime fix because it turns the DO cache into a repairable projection instead of a hard dependency.
+- does the user already have the intended organization?
+- does owner membership already exist?
+- is the session already associated with the organization?
+- is the app-visible authorization state already usable?
 
-Without this, queue lag will always be user-visible even if the bootstrap orchestrator is otherwise correct.
+If we cannot read those truths, then safe retry is impossible.
 
-## Why A Background Reconciler Is Required
+That is not a code-style preference. That is a correctness requirement.
 
-Even a perfect bootstrap runner is not enough if its trigger can be lost.
+## Viable Immediate Workflow
 
-The bootstrap currently starts from Better Auth `databaseHooks.user.create.after` in [src/lib/Auth.ts](file:///Users/mw/Documents/src/tanstack-cloudflare-effect-invoice/src/lib/Auth.ts#L121-L191). That hook runs after Better Auth commits the user creation.
+From first principles, the immediate workflow should look like this:
 
-So this can happen:
+## Phase 1: authentication
 
-1. user row commits
-2. process crashes before org bootstrap is scheduled or finished
+- run the Better Auth login flow
+- once auth succeeds, do not redirect to the app yet
 
-At that point the system needs a way to rediscover unfinished bootstrap work from D1 itself.
+## Phase 2: synchronous bootstrap gate
 
-That is what the reconciler does.
+The bootstrap owner now runs the state machine.
 
-## Reconciler Responsibilities
+Example structure:
 
-The reconciler should periodically scan D1 for unmet invariants such as:
+1. Check whether the required organization already exists for this user.
+2. If not, call Better Auth organization creation.
+3. Re-read durable state.
+4. Check whether owner membership exists.
+5. If not, create or repair it through the correct Better Auth path.
+6. Re-read durable state.
+7. Check whether active organization is set.
+8. If not, set it.
+9. Re-read durable state.
+10. Check whether the app can authorize immediately.
+11. If yes, redirect to the app.
+12. If no, stay in bootstrap and continue repair or fail explicitly.
 
-- user exists but has no owner org
-- user has owner org but sessions still have `activeOrganizationId is null`
-- D1 membership exists but DO cache is missing or stale
+The important property is not the exact sequence. The important property is that every write is followed by verification before moving on.
 
-The reconciler can be run by:
+## Phase 3: app entry
 
-- Cloudflare Workflow
-- Durable Object alarm
-- scheduled Worker trigger
+Only after all invariants are true should the user be redirected into the app.
 
-Any of those is fine. The important property is that it re-derives required work from D1, not from an in-memory assumption that the original hook completed.
+This is how you avoid the state "logged in but unusable".
 
-## Optional Job Table
+## Immediate Correctness Requirement
 
-A bootstrap job table is useful, but it is not sufficient by itself.
+The app cannot depend on asynchronous projection to become usable after redirect.
 
-If we add one, it should track things like:
+That means one of two things must be true before app entry:
 
-- `userId`
-- current status
-- last error
-- next retry time
-- attempt count
+1. the projection is synchronously seeded during bootstrap
+2. the app authorization path reads durable truth directly or can repair synchronously from durable truth
 
-That helps observability and backoff.
+If neither is true, the system is still racey.
 
-But correctness should not depend only on that table, because the job row itself can be missed if the process dies at the wrong time. The real safety net is the invariant scanner over actual auth and org state.
+## Role of Queues and Durable Objects
 
-## What To Avoid
+Queues and Durable Objects are still useful, but only in the right place.
 
-## Do not blind retry Better Auth writes
+## Queue
 
-This is the main trap.
+Use queues for:
 
-If `createOrganization()` or future member-add APIs can partially succeed, then retrying just because the call threw is unsafe.
+- projection
+- fan-out
+- retries of non-user-facing follow-up work
 
-Always re-read D1 before retrying.
+Do not use queues as the thing that makes first login succeed.
 
-## Do not make the queue part of the correctness boundary
+## Durable Objects
 
-The queue is useful for propagating state. It is not safe to make first-request authorization depend on the queue finishing first.
+Use Durable Objects for:
 
-## Do not try to compensate by deleting partial state
+- local authorization cache
+- coordination
+- session-adjacent app state
 
-Forward convergence is much safer than trying to roll back partial Better Auth writes.
+But if the Durable Object cache can be stale, then either:
 
-If the org already exists and the member already exists, the right move is usually to finish the remaining repair work, not to delete the org and start over.
+- bootstrap must synchronously seed it before redirect
+- or app entry must be able to repair from durable truth on first use
 
-## Viable End State
+Otherwise the first request race remains.
 
-The viable end state looks like this:
+## Background Repair, Reframed
 
-1. Better Auth APIs remain the only write path for auth and org creation.
-2. Bootstrap runs as a convergent workflow, not a one-shot chain.
-3. Each uncertain failure is resolved by re-reading D1.
-4. Session repair stays idempotent.
-5. Queue sync becomes best-effort acceleration.
-6. Authorization can repair the DO cache from D1 on miss.
-7. A background reconciler scans D1 for unfinished bootstrap and repairs it.
+Background repair is optional and secondary.
 
-That combination is practical and compatible with the current architecture.
+If it exists, its role is:
 
-## Recommended Plan
+- recover from crashes after the auth boundary was crossed but before bootstrap completed
+- fix rare lost projection updates
+- improve operational safety
 
-1. Change organization-agent authorization to read-repair from D1 on local cache miss.
-2. Extract bootstrap into an explicit runner that evaluates invariants instead of chaining writes inline.
-3. Keep using Better Auth `createOrganization(...)` for the org write.
-4. Before every retry of that call, check D1 first for an owner org.
-5. Keep the existing idempotent session backfill.
-6. Treat `MembershipSync` as best effort and retriable, not required for correctness.
-7. Add a periodic reconciler that scans D1 for users missing owner org bootstrap or session repair.
+Its role is not:
+
+- making first login work
+- making the app usable after redirect
+
+That distinction matters.
+
+## Real Architectural Conclusion
+
+The real problem is not just that the APIs are discrete.
+
+The real problem is this:
+
+> there is no single synchronous owner between "auth succeeded" and "user may enter app"
+
+That is the thing that must be fixed.
+
+## Recommendation
+
+## Primary recommendation
+
+Implement a single bootstrap owner at the auth boundary.
+
+That owner should:
+
+1. run synchronously before app entry
+2. evaluate durable invariants
+3. issue one Better Auth write at a time
+4. re-read durable truth after every write or failure
+5. only redirect when the account is actually usable
+
+## Secondary recommendation
+
+Make projection state non-authoritative for first app entry.
+
+That means either:
+
+1. seed the authorization projection synchronously before redirect
+2. or allow first-use synchronous repair from durable truth
+
+## Tertiary recommendation
+
+If desired, add an on-demand or scheduled repair path as a safety net, but do not confuse that with the primary solution.
 
 ## Bottom Line
 
-Given the constraint that we must call Better Auth APIs and those calls may fail after side effects, the workable solution is:
+Given discrete Better Auth calls that may partially succeed, the viable first-principles design is:
 
-> make bootstrap converge from D1 invariants, not from API-call success responses.
+> one synchronous bootstrap state machine, owned by the auth-to-app handoff, driven by durable invariants, with read-before-retry after every ambiguous failure.
 
-That is the real fault-tolerant approach available here.
+Anything weaker still leaves a real window where the user is authenticated but the system is unusable.
