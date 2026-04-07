@@ -10,7 +10,7 @@ import * as OrganizationDomain from "@/lib/OrganizationDomain";
 import { R2 } from "@/lib/R2";
 import { Repository } from "@/lib/Repository";
 
-const r2QueueMessageSchema = Schema.Struct({
+const r2PutObjectNotificationSchema = Schema.Struct({
   action: Schema.Literals(["PutObject"]),
   object: Schema.Struct({ key: Schema.NonEmptyString }),
   eventTime: Schema.NonEmptyString,
@@ -37,7 +37,7 @@ export const membershipSyncQueueMessageSchema = Schema.Struct({
 });
 
 const queueMessageSchema = Schema.Union([
-  r2QueueMessageSchema,
+  r2PutObjectNotificationSchema,
   finalizeInvoiceDeletionQueueMessageSchema,
   membershipSyncQueueMessageSchema,
 ]);
@@ -75,7 +75,7 @@ const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
  * before forwarding the upload event to the organization Durable Object.
  */
 const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
-  notification: typeof r2QueueMessageSchema.Type,
+  notification: typeof r2PutObjectNotificationSchema.Type,
 ) {
   const r2 = yield* R2;
   const head = yield* r2.head(notification.object.key);
