@@ -22,7 +22,7 @@ import {
 
 export { InvoiceExtractionWorkflow } from "./invoice-extraction-workflow";
 export { OrganizationAgent } from "./organization-agent";
-export { MembershipSyncQueueMessageSchema as membershipSyncQueueMessageSchema } from "@/lib/Q";
+export { MembershipSyncQueueMessageSchema as membershipSyncQueueMessageSchema } from "@/lib/MembershipSync";
 
 /**
  * Runs an Effect within the full app layer for HTTP request handlers (fetch,

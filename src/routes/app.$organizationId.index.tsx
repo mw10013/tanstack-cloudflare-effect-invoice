@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/item";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
-import { sendMembershipSync } from "@/lib/Q";
+import { sendMembershipSync } from "@/lib/MembershipSync";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 

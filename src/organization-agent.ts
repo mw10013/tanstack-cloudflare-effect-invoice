@@ -20,6 +20,7 @@ import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import * as Domain from "@/lib/Domain";
 import { D1 } from "@/lib/D1";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
+import type { MembershipSyncChange } from "@/lib/MembershipSync";
 import {
   DeleteInvoiceInput,
   GetInvoiceInput,
@@ -500,9 +501,18 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
+  /**
+   * Applies membership sync events from queue delivery into the DO-local Member table.
+   *
+   * This handler supports fault-tolerant eventual consistency: queue delivery is
+   * at-least-once and can be delayed or reordered, so each event is validated
+   * against D1 before mutating local state. D1 is treated as the authoritative
+   * membership source, and alignment checks prevent applying stale/contradictory
+   * events that would drift the DO mirror from canonical membership.
+   */
   onMembershipSync(input: {
     userId: Domain.User["id"];
-    change: "added" | "removed" | "role_changed";
+    change: MembershipSyncChange;
   }) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {

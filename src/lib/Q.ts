@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import * as Domain from "@/lib/Domain";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
+import { MembershipSyncQueueMessageSchema } from "@/lib/MembershipSync";
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
 
 const R2PutObjectNotificationSchema = Schema.Struct({
@@ -17,32 +18,6 @@ const FinalizeInvoiceDeletionQueueMessageSchema = Schema.Struct({
   organizationId: Domain.Organization.fields.id,
   invoiceId: OrganizationDomain.Invoice.fields.id,
   r2ObjectKey: OrganizationDomain.Invoice.fields.r2ObjectKey,
-});
-
-const membershipSyncChangeValues = [
-  "added",
-  "removed",
-  "role_changed",
-] as const;
-
-export const MembershipSyncQueueMessageSchema = Schema.Struct({
-  action: Schema.Literals(["MembershipSync"]),
-  organizationId: Domain.Organization.fields.id,
-  userId: Domain.User.fields.id,
-  change: Schema.Literals(membershipSyncChangeValues),
-});
-
-export const sendMembershipSync = Effect.fn("sendMembershipSync")(function* (
-  input: Omit<typeof MembershipSyncQueueMessageSchema.Type, "action">,
-) {
-  const env = yield* CloudflareEnv;
-  const message: typeof MembershipSyncQueueMessageSchema.Type = {
-    action: "MembershipSync",
-    organizationId: input.organizationId,
-    userId: input.userId,
-    change: input.change,
-  };
-  yield* Effect.tryPromise(() => env.Q.send(message));
 });
 
 const QueueMessageSchema = Schema.Union([
