@@ -1,7 +1,6 @@
 import type { Connection, ConnectionContext } from "agents";
 
 import type { ActivityMessage } from "@/lib/Activity";
-import type * as Domain from "@/lib/Domain";
 import type { InvoiceExtractionSchema } from "@/lib/InvoiceExtraction";
 import type { Invoice } from "@/lib/OrganizationDomain";
 
@@ -18,6 +17,8 @@ import * as Schema from "effect/Schema";
 
 import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
+import * as Domain from "@/lib/Domain";
+import { D1 } from "@/lib/D1";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
 import {
   DeleteInvoiceInput,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/OrganizationDomain";
 import { OrganizationRepository } from "@/lib/OrganizationRepository";
 import { R2 } from "@/lib/R2";
+import { Repository } from "@/lib/Repository";
 
 const invoiceMimeTypes = [
   "application/pdf",
@@ -56,12 +58,20 @@ const r2ObjectCustomMetadataSchema = Schema.Struct({
 
 const makeRunEffect = (ctx: DurableObjectState, env: Env) => {
   const sqliteLayer = SqliteClient.layer({ db: ctx.storage.sql });
-  const repoLayer = Layer.provideMerge(
+  const organizationRepositoryLayer = Layer.provideMerge(
     OrganizationRepository.layer,
     sqliteLayer,
   );
-  const r2Layer = Layer.provideMerge(R2.layer, makeEnvLayer(env));
-  const layer = Layer.mergeAll(repoLayer, r2Layer, makeLoggerLayer(env));
+  const envLayer = makeEnvLayer(env);
+  const r2Layer = Layer.provideMerge(R2.layer, envLayer);
+  const d1Layer = Layer.provideMerge(D1.layer, envLayer);
+  const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
+  const layer = Layer.mergeAll(
+    organizationRepositoryLayer,
+    r2Layer,
+    repositoryLayer,
+    makeLoggerLayer(env),
+  );
   return <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof layer>>) =>
     Effect.runPromise(Effect.provide(effect, layer));
 };
@@ -490,23 +500,52 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-  onMembershipChanged(input: {
+  onMembershipSync(input: {
     userId: Domain.User["id"];
-    role: Domain.MemberRole;
     change: "added" | "removed" | "role_changed";
   }) {
     return this.runEffect(
-      Effect.gen(function* () {
-        yield* Effect.logInfo("onMembershipChanged", {
+      Effect.gen({ self: this }, function* () {
+        const organizationId =
+          yield* Schema.decodeUnknownEffect(Domain.Organization.fields.id)(
+            this.name,
+          );
+        yield* Effect.logInfo("onMembershipSync", {
+          organizationId,
           userId: input.userId,
-          role: input.role,
           change: input.change,
           agentName: getCurrentAgent<OrganizationAgent>().agent?.name,
         });
+        const repository = yield* Repository;
+        const d1Member = yield* repository.getMemberByUserAndOrg({
+          userId: input.userId,
+          organizationId,
+        });
+        yield* Effect.logInfo("onMembershipSync.d1Check", {
+          d1MemberFound: Option.isSome(d1Member),
+          change: input.change,
+        });
         const repo = yield* OrganizationRepository;
-        yield* input.change === "removed"
-          ? repo.deleteMember(input.userId)
-          : repo.upsertMember({ userId: input.userId, role: input.role });
+        switch (input.change) {
+          case "added":
+          case "role_changed": {
+            if (Option.isNone(d1Member))
+              return yield* new OrganizationAgentError({
+                message: `D1 has no member for userId=${input.userId} organizationId=${organizationId} (change=${input.change})`,
+              });
+            return yield* repo.upsertMember({
+              userId: input.userId,
+              role: d1Member.value.role,
+            });
+          }
+          case "removed": {
+            if (Option.isSome(d1Member))
+              return yield* new OrganizationAgentError({
+                message: `D1 still has member for userId=${input.userId} organizationId=${organizationId} (change=removed)`,
+              });
+            return yield* repo.deleteMember(input.userId);
+          }
+        }
       }),
     );
   }

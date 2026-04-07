@@ -1,13 +1,10 @@
 import { Effect, Layer } from "effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
-import { D1 } from "@/lib/D1";
 import * as Domain from "@/lib/Domain";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
-import { Repository } from "@/lib/Repository";
 
 const R2PutObjectNotificationSchema = Schema.Struct({
   action: Schema.Literals(["PutObject"]),
@@ -108,84 +105,36 @@ const processFinalizeInvoiceDeletion = Effect.fn(
 const processMembershipSync = Effect.fn("processMembershipSync")(function* (
   message: typeof MembershipSyncQueueMessageSchema.Type,
 ) {
-  yield* Effect.logInfo("processMembershipSync", {
-    organizationId: message.organizationId,
-    userId: message.userId,
-    change: message.change,
-  });
-  const repository = yield* Repository;
-  const d1Member = yield* repository.getMemberByUserAndOrg({
-    userId: message.userId,
-    organizationId: message.organizationId,
-  });
-  yield* Effect.logInfo("processMembershipSync.d1Check", {
-    d1MemberFound: Option.isSome(d1Member),
-    change: message.change,
-  });
-  switch (message.change) {
-    case "added":
-    case "role_changed": {
-      if (Option.isNone(d1Member)) {
-        return yield* new MembershipSyncNotAlignedError({
-          message: `D1 has no member for userId=${message.userId} organizationId=${message.organizationId} (change=${message.change})`,
-        });
-      }
-      const stub = yield* getOrganizationAgentStub(message.organizationId);
-      yield* Effect.tryPromise(() =>
-        stub.onMembershipChanged({
-          userId: message.userId,
-          role: d1Member.value.role,
-          change: message.change,
-        }),
-      );
-      break;
-    }
-    case "removed": {
-      if (Option.isSome(d1Member)) {
-        return yield* new MembershipSyncNotAlignedError({
-          message: `D1 still has member for userId=${message.userId} organizationId=${message.organizationId} (change=removed)`,
-        });
-      }
-      const stub = yield* getOrganizationAgentStub(message.organizationId);
-      yield* Effect.tryPromise(() =>
-        stub.onMembershipChanged({
-          userId: message.userId,
-          role: "member",
-          change: "removed",
-        }),
-      );
-    }
-  }
+  const stub = yield* getOrganizationAgentStub(message.organizationId);
+  yield* Effect.tryPromise(() =>
+    stub.onMembershipSync({
+      userId: message.userId,
+      change: message.change,
+    }),
+  );
 });
-
-class MembershipSyncNotAlignedError extends Schema.TaggedErrorClass<MembershipSyncNotAlignedError>()(
-  "MembershipSyncNotAlignedError",
-  { message: Schema.String },
-) {}
 
 const processQueueMessage = Effect.fn("processQueueMessage")(function* (
   messageBody: unknown,
 ) {
-  const notification =
+  const message =
     yield* Schema.decodeUnknownEffect(QueueMessageSchema)(messageBody);
-  switch (notification.action) {
+  switch (message.action) {
     case "FinalizeInvoiceDeletion": {
-      return yield* processFinalizeInvoiceDeletion(notification);
+      return yield* processFinalizeInvoiceDeletion(message);
     }
     case "PutObject": {
-      return yield* processInvoiceUpload(notification);
+      return yield* processInvoiceUpload(message);
     }
     case "MembershipSync": {
-      return yield* processMembershipSync(notification);
+      return yield* processMembershipSync(message);
     }
   }
 });
 
 const makeRuntimeLayer = (env: Env) => {
   const envLayer = makeEnvLayer(env);
-  const d1Layer = Layer.provideMerge(D1.layer, envLayer);
-  const repositoryLayer = Layer.provideMerge(Repository.layer, d1Layer);
-  return Layer.mergeAll(envLayer, repositoryLayer, makeLoggerLayer(env));
+  return Layer.mergeAll(envLayer, makeLoggerLayer(env));
 };
 
 export const queue: ExportedHandler<Env>["queue"] = async (batch, env) => {

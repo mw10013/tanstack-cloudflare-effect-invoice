@@ -156,9 +156,8 @@ const makeAuth = ({
                 const stub = organizationAgent.get(id);
                 yield* Effect.tryPromise(() => stub.setName(organizationId));
                 yield* Effect.tryPromise(() =>
-                  stub.onMembershipChanged({
+                  stub.onMembershipSync({
                     userId,
-                    role: "owner",
                     change: "added",
                   }),
                 );
