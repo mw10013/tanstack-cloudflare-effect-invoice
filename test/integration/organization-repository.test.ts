@@ -297,41 +297,41 @@ describe("OrganizationRepository", () => {
     }));
   });
 
-  it("deleteInvoiceRecord — deletes ready invoice", async () => {
+  it("deleteInvoice — deletes ready invoice", async () => {
     await runInOrg(`delete-ready-${crypto.randomUUID()}`, Effect.gen(function* () {
       const repo = yield* OrganizationRepository;
       const inv = yield* seedInvoice({ status: "ready" });
-      const deleted = yield* repo.deleteInvoiceRecord(inv.id);
+      const deleted = yield* repo.deleteInvoice(inv.id);
       expect(deleted).toHaveLength(1);
       expect(Option.isNone(yield* repo.findInvoice(inv.id))).toBe(true);
     }));
   });
 
-  it("deleteInvoiceRecord — deletes error invoice", async () => {
+  it("deleteInvoice — deletes error invoice", async () => {
     await runInOrg(`delete-error-${crypto.randomUUID()}`, Effect.gen(function* () {
       const repo = yield* OrganizationRepository;
       const inv = yield* seedInvoice({ status: "error" });
-      const deleted = yield* repo.deleteInvoiceRecord(inv.id);
+      const deleted = yield* repo.deleteInvoice(inv.id);
       expect(deleted).toHaveLength(1);
     }));
   });
 
-  it("deleteInvoiceRecord — skips extracting invoice", async () => {
+  it("deleteInvoice — deletes extracting invoice", async () => {
     await runInOrg(`delete-extracting-${crypto.randomUUID()}`, Effect.gen(function* () {
       const repo = yield* OrganizationRepository;
       const inv = yield* seedInvoice({ status: "extracting" });
-      const deleted = yield* repo.deleteInvoiceRecord(inv.id);
-      expect(deleted).toHaveLength(0);
-      expect(Option.isSome(yield* repo.findInvoice(inv.id))).toBe(true);
+      const deleted = yield* repo.deleteInvoice(inv.id);
+      expect(deleted).toHaveLength(1);
+      expect(Option.isNone(yield* repo.findInvoice(inv.id))).toBe(true);
     }));
   });
 
-  it("deleteInvoiceRecord — skips uploading invoice", async () => {
+  it("deleteInvoice — deletes uploading invoice", async () => {
     await runInOrg(`delete-uploading-${crypto.randomUUID()}`, Effect.gen(function* () {
       const repo = yield* OrganizationRepository;
       const inv = yield* seedInvoice({ status: "uploading" });
-      const deleted = yield* repo.deleteInvoiceRecord(inv.id);
-      expect(deleted).toHaveLength(0);
+      const deleted = yield* repo.deleteInvoice(inv.id);
+      expect(deleted).toHaveLength(1);
     }));
   });
 

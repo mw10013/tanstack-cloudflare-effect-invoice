@@ -103,15 +103,15 @@ const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
 });
 
 const processInvoiceDelete = Effect.fn("processInvoiceDelete")(function* (
-  notification: typeof invoiceDeleteQueueMessageSchema.Type,
+  message: typeof invoiceDeleteQueueMessageSchema.Type,
 ) {
-  const stub = yield* getOrganizationAgentStub(notification.organizationId);
+  const stub = yield* getOrganizationAgentStub(message.organizationId);
   yield* Effect.tryPromise(() =>
-    stub.deleteInvoiceRecord(notification.invoiceId),
+    stub.deleteInvoiceById(message.invoiceId),
   );
-  if (!notification.r2ObjectKey) return;
+  if (!message.r2ObjectKey) return;
   const r2 = yield* R2;
-  yield* r2.delete(notification.r2ObjectKey);
+  yield* r2.delete(message.r2ObjectKey);
 });
 
 const processMembershipSync = Effect.fn("processMembershipSync")(function* (

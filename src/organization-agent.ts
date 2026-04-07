@@ -9,11 +9,9 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Agent, callable, getCurrentAgent } from "agents";
 import {
   Config,
-  ConfigProvider,
   Effect,
   Layer,
   Option,
-  ServiceMap,
 } from "effect";
 import * as Schema from "effect/Schema";
 
@@ -425,16 +423,16 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
               message: cause instanceof Error ? cause.message : String(cause),
             }),
         });
-        yield* repo.deleteInvoiceRecord(invoiceId);
+        yield* repo.deleteInvoice(invoiceId);
       }),
     );
   }
 
-  deleteInvoiceRecord(invoiceId: Invoice["id"]) {
+  deleteInvoiceById(invoiceId: Invoice["id"]) {
     return this.runEffect(
       Effect.gen(function* () {
         const repo = yield* OrganizationRepository;
-        yield* repo.deleteInvoiceRecord(invoiceId);
+        yield* repo.deleteInvoice(invoiceId);
       }),
     );
   }
