@@ -66,6 +66,14 @@ const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
   },
 );
 
+/**
+ * Handles Cloudflare R2 event notification messages for object uploads.
+ *
+ * This function processes queue messages where `action` is `PutObject`.
+ * Cloudflare's R2 notification payload includes `action`, `object.key`, and
+ * `eventTime`, so this handler reads object custom metadata via `R2.head()`
+ * before forwarding the upload event to the organization Durable Object.
+ */
 const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
   notification: typeof r2QueueMessageSchema.Type,
 ) {

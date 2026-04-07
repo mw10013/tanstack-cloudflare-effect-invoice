@@ -161,13 +161,19 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     connection.setState({ userId });
   }
 
+  /**
+   * Handles Cloudflare R2 `PutObject` event notifications forwarded from the queue consumer.
+   *
+   * Queue delivery is at-least-once, so this uses `idempotencyKey` and existing invoice state
+   * to no-op duplicate notifications and only start extraction once per upload.
+   */
   onInvoiceUpload(upload: {
     invoiceId: Invoice["id"];
     r2ActionTime: string;
-    idempotencyKey: string;
-    r2ObjectKey: string;
-    fileName: string;
-    contentType: string;
+    idempotencyKey: NonNullable<Invoice["idempotencyKey"]>;
+    r2ObjectKey: Invoice["r2ObjectKey"];
+    fileName: Invoice["fileName"];
+    contentType: Invoice["contentType"];
   }) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
@@ -195,8 +201,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           Option.isSome(existing) &&
           existing.value.idempotencyKey !== null &&
           existing.value.idempotencyKey === upload.idempotencyKey &&
-          (existing.value.status === "extracting" ||
-            existing.value.status === "ready")
+          existing.value.r2ActionTime !== null
         )
           return;
         const name = upload.fileName.replace(/\.[^.]+$/, "");
@@ -281,8 +286,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
    *   ran (possible because r2.put yields the event loop), the existing
    *   "extracting" row is preserved and the insert is a no-op.
    * - {@link onInvoiceUpload} handles a pre-existing "uploading" row correctly —
-   *   its idempotency guards skip only "extracting"/"ready", so it proceeds to
-   *   upsert the row to "extracting" and start the workflow.
+   *   idempotency dedupe only applies after `r2ActionTime` is set, so it still
+   *   upserts to "extracting" and starts the workflow for the first notification.
    */
   @callable()
   uploadInvoice(input: typeof UploadInvoiceInput.Type) {
