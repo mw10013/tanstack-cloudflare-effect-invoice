@@ -513,7 +513,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     change: MembershipSyncChange;
   }) {
     return this.runEffect(
-      syncMembershipImpl("syncMembership", this.name, input),
+      syncMembershipImpl("syncMembership", this, input),
     );
   }
 
@@ -537,7 +537,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     change: MembershipSyncChange;
   }) {
     return this.runEffect(
-      syncMembershipImpl("onFinalizeMembershipSync", this.name, input),
+      syncMembershipImpl("onFinalizeMembershipSync", this, input),
     );
   }
 
@@ -649,12 +649,12 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
 const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
   function* (
     caller: string,
-    agentName: string,
+    agent: OrganizationAgent,
     input: { userId: Domain.User["id"]; change: MembershipSyncChange },
   ) {
     const organizationId = yield* Schema.decodeUnknownEffect(
       Domain.Organization.fields.id,
-    )(agentName);
+    )(agent.name);
     yield* Effect.logInfo(caller, {
       organizationId,
       userId: input.userId,
@@ -687,7 +687,18 @@ const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
           return yield* new OrganizationAgentError({
             message: `D1 still has member for userId=${input.userId} organizationId=${organizationId} (change=removed)`,
           });
-        return yield* repo.deleteMember(input.userId);
+        yield* repo.deleteMember(input.userId);
+        yield* Effect.forEach(
+          agent.getConnections<OrganizationAgentConnectionState>(),
+          (conn) =>
+            conn.state?.userId === input.userId
+              ? Effect.try({
+                  try: () => { conn.close(4003, "Membership revoked"); },
+                  catch: (error) => new OrganizationAgentError({ message: error instanceof Error ? error.message : String(error) }),
+                }).pipe(Effect.catch((error) => Effect.logWarning("conn.close failed", error)))
+              : Effect.void,
+          { discard: true },
+        );
       }
     }
   },

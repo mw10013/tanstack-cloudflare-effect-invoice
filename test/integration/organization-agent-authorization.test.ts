@@ -2,7 +2,6 @@ import { env } from "cloudflare:workers";
 import { ConfigProvider, Effect, Layer, ServiceMap } from "effect";
 import * as Schema from "effect/Schema";
 import { layer } from "@effect/vitest";
-import { assertInclude } from "@effect/vitest/utils";
 import { expect } from "vitest";
 
 import { switchOrganizationServerFn } from "@/routes/app.$organizationId";
@@ -18,7 +17,6 @@ import {
 
 import {
   agentWebSocket,
-  assertAgentRpcFailure,
   assertAgentRpcSuccess,
   callAgentRpc,
   callServerFn,
@@ -257,7 +255,7 @@ layer(configLayer, { excludeTestServices: true })(
         expect(text).toContain("Forbidden");
       }));
 
-    it.effect("removed member is forbidden", () =>
+    it.effect("removed member is disconnected", () =>
       Effect.gen(function* () {
         const ownerEmail = `int-auth-removed-owner-${crypto.randomUUID()}@test.com`;
         const memberEmail = `int-auth-removed-member-${crypto.randomUUID()}@test.com`;
@@ -289,6 +287,10 @@ layer(configLayer, { excludeTestServices: true })(
         const firstCreateResult = yield* callAgentRpc(ws, "createInvoice", []);
         assertAgentRpcSuccess(firstCreateResult);
 
+        const closePromise = new Promise<CloseEvent>((resolve) => {
+          ws.addEventListener("close", resolve, { once: true });
+        });
+
         const memberId = yield* getMemberIdByEmail({
           ownerSessionCookie: owner.sessionCookie,
           organizationId: owner.organizationId,
@@ -300,9 +302,13 @@ layer(configLayer, { excludeTestServices: true })(
           memberId,
         });
 
-        const forbiddenResult = yield* callAgentRpc(ws, "createInvoice", []);
-        assertAgentRpcFailure(forbiddenResult);
-        assertInclude(forbiddenResult.error, "Forbidden");
+        const closeEvent = yield* Effect.promise(() => closePromise).pipe(
+          Effect.timeout("10 seconds"),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.die(new Error("WebSocket was not closed after member removal"))),
+        );
+        expect(closeEvent.code).toBe(4003);
+        expect(closeEvent.reason).toBe("Membership revoked");
       }));
   },
 );

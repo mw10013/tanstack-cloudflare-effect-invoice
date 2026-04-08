@@ -122,6 +122,14 @@ yield* Effect.tryPromise(() => stub.syncMembership({ userId, change: "role_chang
 | `onMembershipSync` (agent method) | Split into `syncMembership` + `onFinalizeMembershipSync` | Separates eager path (direct call, must succeed for UX) from background path (validation, can retry) |
 | `membershipSyncChangeValues` | Keep `"added" \| "removed" \| "role_changed"` | Still useful for both eager and finalization |
 
+## WebSocket Disconnection on Removal
+
+When a member is removed, both `syncMembership` and `onFinalizeMembershipSync` forcibly close all WebSocket connections belonging to that user (close code `4003`, reason `"Membership revoked"`). This runs after `syncMembershipImpl` deletes the Member row.
+
+**Why**: Without this, removed members continue receiving `broadcastActivity` messages (invoice names, extraction status) until they refresh — a minor authorization gap. The close event also gives the client a clear signal to show "removed from org" UI instead of cryptic RPC errors.
+
+**Implementation**: `disconnectUser(agent, userId)` iterates `agent.getConnections()`, matching `conn.state?.userId`, and calls `conn.close(4003, "Membership revoked")`.
+
 ## Error Handling
 
 ### What if eager sync fails?
