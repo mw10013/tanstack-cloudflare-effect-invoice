@@ -494,60 +494,50 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }
 
   /**
-   * Applies membership sync events from queue delivery into the DO-local Member table.
+   * Eagerly syncs a single membership change into the DO-local Member table.
    *
-   * This handler supports fault-tolerant eventual consistency: queue delivery is
-   * at-least-once and can be delayed or reordered, so each event is validated
-   * against D1 before mutating local state. D1 is treated as the authoritative
-   * membership source, and alignment checks prevent applying stale/contradictory
-   * events that would drift the DO mirror from canonical membership.
+   * Callers invoke this **directly** (not via queue) immediately after the
+   * corresponding better-auth API call mutates D1, so the user gains (or
+   * loses) access to the organization agent without waiting for queue
+   * delivery.  Failures are **non-fatal** — callers should catch errors and
+   * fall through to the already-enqueued {@link onFinalizeMembershipSync}
+   * which will reconcile later.
+   *
+   * Expected call order in server functions:
+   * 1. `enqueue(FinalizeMembershipSync)` — durable safety net
+   * 2. `auth.api.<mutation>()` — D1 updated
+   * 3. `stub.syncMembership()` — eager sync (best-effort)
    */
-  onMembershipSync(input: {
+  syncMembership(input: {
     userId: Domain.User["id"];
     change: MembershipSyncChange;
   }) {
     return this.runEffect(
-      Effect.gen({ self: this }, function* () {
-        const organizationId = yield* Schema.decodeUnknownEffect(
-          Domain.Organization.fields.id,
-        )(this.name);
-        yield* Effect.logInfo("onMembershipSync", {
-          organizationId,
-          userId: input.userId,
-          change: input.change,
-          agentName: getCurrentAgent<OrganizationAgent>().agent?.name,
-        });
-        const repository = yield* Repository;
-        const d1Member = yield* repository.getMemberByUserAndOrg({
-          userId: input.userId,
-          organizationId,
-        });
-        yield* Effect.logInfo("onMembershipSync.d1Check", {
-          d1MemberFound: Option.isSome(d1Member),
-          change: input.change,
-        });
-        const repo = yield* OrganizationRepository;
-        switch (input.change) {
-          case "added":
-          case "role_changed": {
-            if (Option.isNone(d1Member))
-              return yield* new OrganizationAgentError({
-                message: `D1 has no member for userId=${input.userId} organizationId=${organizationId} (change=${input.change})`,
-              });
-            return yield* repo.upsertMember({
-              userId: input.userId,
-              role: d1Member.value.role,
-            });
-          }
-          case "removed": {
-            if (Option.isSome(d1Member))
-              return yield* new OrganizationAgentError({
-                message: `D1 still has member for userId=${input.userId} organizationId=${organizationId} (change=removed)`,
-              });
-            return yield* repo.deleteMember(input.userId);
-          }
-        }
-      }),
+      syncMembershipImpl("syncMembership", this.name, input),
+    );
+  }
+
+  /**
+   * Queue-delivered finalization handler that verifies D1 and the DO-local
+   * Member table are aligned for a specific membership change.
+   *
+   * Enqueued **before** the better-auth API call to guarantee the message is
+   * durable even if the process crashes mid-mutation. Because D1 is
+   * validated on every invocation, this is safe under at-least-once delivery,
+   * reordering, and race conditions with {@link syncMembership}:
+   *
+   * - If eager sync already succeeded, finalization is a no-op.
+   * - If eager sync failed or was skipped (crash between API call and eager
+   *   sync), finalization applies the change.
+   * - If the API call itself failed (D1 unchanged), finalization detects the
+   *   mismatch and rejects the stale event.
+   */
+  onFinalizeMembershipSync(input: {
+    userId: Domain.User["id"];
+    change: MembershipSyncChange;
+  }) {
+    return this.runEffect(
+      syncMembershipImpl("onFinalizeMembershipSync", this.name, input),
     );
   }
 
@@ -639,6 +629,69 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 }
+
+/**
+ * Shared implementation for {@link OrganizationAgent.syncMembership} and
+ * {@link OrganizationAgent.onFinalizeMembershipSync}.
+ *
+ * Reads the member's current state from D1 (authoritative) and aligns the
+ * DO-local Member table accordingly. The `change` hint is validated against
+ * D1 to guard against stale or reordered events:
+ *
+ * - `added` / `role_changed`: D1 must contain the member → upsert locally.
+ * - `removed`: D1 must **not** contain the member → delete locally.
+ *
+ * If D1 contradicts the requested change the effect fails with
+ * {@link OrganizationAgentError}, which causes queue retries when called
+ * from `onFinalizeMembershipSync` and is safely caught when called from
+ * `syncMembership`.
+ */
+const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
+  function* (
+    caller: string,
+    agentName: string,
+    input: { userId: Domain.User["id"]; change: MembershipSyncChange },
+  ) {
+    const organizationId = yield* Schema.decodeUnknownEffect(
+      Domain.Organization.fields.id,
+    )(agentName);
+    yield* Effect.logInfo(caller, {
+      organizationId,
+      userId: input.userId,
+      change: input.change,
+    });
+    const repository = yield* Repository;
+    const d1Member = yield* repository.getMemberByUserAndOrg({
+      userId: input.userId,
+      organizationId,
+    });
+    yield* Effect.logInfo(`${caller}.d1Check`, {
+      d1MemberFound: Option.isSome(d1Member),
+      change: input.change,
+    });
+    const repo = yield* OrganizationRepository;
+    switch (input.change) {
+      case "added":
+      case "role_changed": {
+        if (Option.isNone(d1Member))
+          return yield* new OrganizationAgentError({
+            message: `D1 has no member for userId=${input.userId} organizationId=${organizationId} (change=${input.change})`,
+          });
+        return yield* repo.upsertMember({
+          userId: input.userId,
+          role: d1Member.value.role,
+        });
+      }
+      case "removed": {
+        if (Option.isSome(d1Member))
+          return yield* new OrganizationAgentError({
+            message: `D1 still has member for userId=${input.userId} organizationId=${organizationId} (change=removed)`,
+          });
+        return yield* repo.deleteMember(input.userId);
+      }
+    }
+  },
+);
 
 const getConnectionIdentity = Effect.fn(
   "OrganizationAgent.getConnectionIdentity",

@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
-import { enqueue } from "@/lib/Q";
+import { enqueue, getOrganizationAgentStub } from "@/lib/Q";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
@@ -106,7 +106,7 @@ export const removeMember = createServerFn({ method: "POST" })
         const member = yield* repository.getMemberById(memberId);
         if (Option.isSome(member)) {
           yield* enqueue({
-            action: "MembershipSync",
+            action: "FinalizeMembershipSync",
             organizationId,
             userId: member.value.userId,
             change: "removed",
@@ -118,6 +118,12 @@ export const removeMember = createServerFn({ method: "POST" })
             body: { memberIdOrEmail: memberId, organizationId },
           }),
         );
+        if (Option.isSome(member)) {
+          const stub = yield* getOrganizationAgentStub(organizationId);
+          yield* Effect.tryPromise(() =>
+            stub.syncMembership({ userId: member.value.userId, change: "removed" }),
+          ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
+        }
       }),
     ),
   );
@@ -137,10 +143,11 @@ const leaveOrganization = createServerFn({ method: "POST" })
             auth.api.getSession({ headers: request.headers }),
           ),
         );
+        const userId = Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id);
         yield* enqueue({
-          action: "MembershipSync",
+          action: "FinalizeMembershipSync",
           organizationId,
-          userId: Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id),
+          userId,
           change: "removed",
         });
         yield* Effect.tryPromise(() =>
@@ -149,6 +156,10 @@ const leaveOrganization = createServerFn({ method: "POST" })
             body: { organizationId },
           }),
         );
+        const stub = yield* getOrganizationAgentStub(organizationId);
+        yield* Effect.tryPromise(() =>
+          stub.syncMembership({ userId, change: "removed" }),
+        ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
       }),
     ),
   );
@@ -168,7 +179,7 @@ const updateMemberRole = createServerFn({ method: "POST" })
           const member = yield* repository.getMemberById(memberId);
           if (Option.isSome(member)) {
             yield* enqueue({
-              action: "MembershipSync",
+              action: "FinalizeMembershipSync",
               organizationId,
               userId: member.value.userId,
               change: "role_changed",
@@ -180,6 +191,12 @@ const updateMemberRole = createServerFn({ method: "POST" })
               body: { role, memberId, organizationId },
             }),
           );
+          if (Option.isSome(member)) {
+            const stub = yield* getOrganizationAgentStub(organizationId);
+            yield* Effect.tryPromise(() =>
+              stub.syncMembership({ userId: member.value.userId, change: "role_changed" }),
+            ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
+          }
         }),
       ),
   );

@@ -29,8 +29,8 @@ export const MembershipSyncChange = Schema.Literals(membershipSyncChangeValues);
 
 export type MembershipSyncChange = typeof MembershipSyncChange.Type;
 
-export const MembershipSyncQueueMessage = Schema.Struct({
-  action: Schema.Literals(["MembershipSync"]),
+export const FinalizeMembershipSyncQueueMessage = Schema.Struct({
+  action: Schema.Literals(["FinalizeMembershipSync"]),
   organizationId: Domain.Organization.fields.id,
   userId: Domain.User.fields.id,
   change: MembershipSyncChange,
@@ -39,7 +39,7 @@ export const MembershipSyncQueueMessage = Schema.Struct({
 export const QueueMessage = Schema.Union([
   R2PutObjectNotification,
   FinalizeInvoiceDeletionQueueMessage,
-  MembershipSyncQueueMessage,
+  FinalizeMembershipSyncQueueMessage,
 ]);
 
 export type QueueMessage = typeof QueueMessage.Type;
@@ -53,7 +53,7 @@ export const enqueue = Effect.fn("enqueue")(function* (message: QueueMessage) {
 // does not populate the Agents SDK instance name, so name-dependent features
 // like workflows can throw until we set it explicitly. See
 // https://github.com/cloudflare/workerd/issues/2240.
-const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
+export const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
   function* (organizationId: Domain.Organization["id"]) {
     const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
     const id = ORGANIZATION_AGENT.idFromName(organizationId);
@@ -100,12 +100,12 @@ const processFinalizeInvoiceDeletion = Effect.fn(
   );
 });
 
-const processMembershipSync = Effect.fn("processMembershipSync")(function* (
-  message: typeof MembershipSyncQueueMessage.Type,
-) {
+const processFinalizeMembershipSync = Effect.fn(
+  "processFinalizeMembershipSync",
+)(function* (message: typeof FinalizeMembershipSyncQueueMessage.Type) {
   const stub = yield* getOrganizationAgentStub(message.organizationId);
   yield* Effect.tryPromise(() =>
-    stub.onMembershipSync({
+    stub.onFinalizeMembershipSync({
       userId: message.userId,
       change: message.change,
     }),
@@ -123,8 +123,8 @@ const processMessage = Effect.fn("processMessage")(function* (
     case "PutObject": {
       return yield* processInvoiceUpload(message);
     }
-    case "MembershipSync": {
-      return yield* processMembershipSync(message);
+    case "FinalizeMembershipSync": {
+      return yield* processFinalizeMembershipSync(message);
     }
   }
 });

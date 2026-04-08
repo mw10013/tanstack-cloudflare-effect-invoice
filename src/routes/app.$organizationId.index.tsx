@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/item";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
-import { enqueue } from "@/lib/Q";
+import { enqueue, getOrganizationAgentStub } from "@/lib/Q";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
@@ -82,10 +82,11 @@ export const acceptInvitation = createServerFn({ method: "POST" })
               auth.api.getSession({ headers: request.headers }),
             ),
           );
+          const userId = Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id);
           yield* enqueue({
-            action: "MembershipSync",
+            action: "FinalizeMembershipSync",
             organizationId: invitation.value.organizationId,
-            userId: Schema.decodeUnknownSync(Domain.User.fields.id)(session.user.id),
+            userId,
             change: "added",
           });
           yield* Effect.tryPromise(() =>
@@ -94,6 +95,10 @@ export const acceptInvitation = createServerFn({ method: "POST" })
               body: { invitationId },
             }),
           );
+          const stub = yield* getOrganizationAgentStub(invitation.value.organizationId);
+          yield* Effect.tryPromise(() =>
+            stub.syncMembership({ userId, change: "added" }),
+          ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
           // better-auth's acceptInvitation sets activeOrganizationId to the
           // invited org as a side effect — restore it to the current org so
           // accepting doesn't silently switch the user's context.
