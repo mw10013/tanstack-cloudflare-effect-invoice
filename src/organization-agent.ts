@@ -3,25 +3,18 @@ import type { Connection, ConnectionContext } from "agents";
 import type { ActivityMessage } from "@/lib/Activity";
 import type { InvoiceExtraction } from "@/lib/InvoiceExtractor";
 import type { Invoice } from "@/lib/OrganizationDomain";
+import type { MembershipSyncChange } from "@/lib/Q";
 
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Agent, callable, getCurrentAgent } from "agents";
-import {
-  Config,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-} from "effect";
+import { Config, Effect, Layer, Option, Predicate } from "effect";
 import * as Schema from "effect/Schema";
 
 import { ActivityAction } from "@/lib/Activity";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
-import * as Domain from "@/lib/Domain";
 import { D1 } from "@/lib/D1";
+import * as Domain from "@/lib/Domain";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
-import type { MembershipSyncChange } from "@/lib/Q";
-import { enqueue } from "@/lib/Q";
 import {
   DeleteInvoiceInput,
   GetInvoiceInput,
@@ -35,6 +28,7 @@ import {
   activeWorkflowStatuses,
 } from "@/lib/OrganizationDomain";
 import { OrganizationRepository } from "@/lib/OrganizationRepository";
+import { enqueue } from "@/lib/Q";
 import { R2 } from "@/lib/R2";
 import { Repository } from "@/lib/Repository";
 
@@ -48,8 +42,8 @@ const invoiceMimeTypes = [
 
 const MAX_BASE64_SIZE = Math.ceil((10_000_000 * 4) / 3) + 4;
 
-const r2ObjectCustomMetadataSchema = Schema.Struct({
-  organizationId: Schema.NonEmptyString,
+const R2ObjectCustomMetadata = Schema.Struct({
+  organizationId: Domain.Organization.fields.id,
   invoiceId: InvoiceSchema.fields.id,
   idempotencyKey: InvoiceSchema.fields.idempotencyKey.pipe(
     Schema.refine(Predicate.isNotNull),
@@ -57,6 +51,7 @@ const r2ObjectCustomMetadataSchema = Schema.Struct({
   fileName: InvoiceSchema.fields.fileName.check(Schema.isNonEmpty()),
   contentType: InvoiceSchema.fields.contentType.check(Schema.isNonEmpty()),
 });
+type R2ObjectCustomMetadata = typeof R2ObjectCustomMetadata.Type;
 
 const makeRunEffect = (ctx: DurableObjectState, env: Env) => {
   const sqliteLayer = SqliteClient.layer({ db: ctx.storage.sql });
@@ -208,9 +203,9 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
             limit: invoiceLimit,
             message: `Invoice limit of ${String(invoiceLimit)} reached`,
           });
-        const invoiceId = yield* Schema.decodeUnknownEffect(InvoiceSchema.fields.id)(
-          crypto.randomUUID(),
-        );
+        const invoiceId = yield* Schema.decodeUnknownEffect(
+          InvoiceSchema.fields.id,
+        )(crypto.randomUUID());
         yield* repo.createInvoice(invoiceId);
         yield* broadcastActivity(this, {
           action: "invoice.created",
@@ -282,11 +277,14 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           return yield* new OrganizationAgentError({
             message: "Invalid file type",
           });
-        const invoiceId = yield* Schema.decodeUnknownEffect(InvoiceSchema.fields.id)(
-          crypto.randomUUID(),
-        );
+        const organizationId = yield* Schema.decodeUnknownEffect(
+          Domain.Organization.fields.id,
+        )(this.name);
+        const invoiceId = yield* Schema.decodeUnknownEffect(
+          InvoiceSchema.fields.id,
+        )(crypto.randomUUID());
         const idempotencyKey = crypto.randomUUID();
-        const key = `${this.name}/invoices/${invoiceId}`;
+        const key = `${organizationId}/invoices/${invoiceId}`;
         const bytes = Uint8Array.from(
           atob(data.base64),
           (c) => c.codePointAt(0) ?? 0,
@@ -295,12 +293,12 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
         yield* r2.put(key, bytes, {
           httpMetadata: { contentType: data.contentType },
           customMetadata: {
-            organizationId: this.name,
+            organizationId,
             invoiceId,
             idempotencyKey,
             fileName: data.fileName,
             contentType: data.contentType,
-          },
+          } satisfies R2ObjectCustomMetadata,
         });
         const environment = yield* Config.nonEmptyString("ENVIRONMENT");
         if (environment === "local") {
@@ -323,7 +321,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
     );
   }
 
-    /**
+  /**
    * Handles Cloudflare R2 `PutObject` event notifications forwarded from the queue consumer.
    *
    * Queue delivery is at-least-once, so dedupe uses three guards:
@@ -347,8 +345,8 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
           return;
         }
         const metadata = yield* Schema.decodeUnknownEffect(
-          r2ObjectCustomMetadataSchema,
-        )(head.value.customMetadata ?? {});
+          R2ObjectCustomMetadata,
+        )(head.value.customMetadata);
         if (metadata.organizationId !== this.name) {
           yield* Effect.logWarning("onInvoiceUpload.organizationMismatch", {
             r2ObjectKey: upload.r2ObjectKey,
@@ -510,10 +508,9 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   }) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        const organizationId =
-          yield* Schema.decodeUnknownEffect(Domain.Organization.fields.id)(
-            this.name,
-          );
+        const organizationId = yield* Schema.decodeUnknownEffect(
+          Domain.Organization.fields.id,
+        )(this.name);
         yield* Effect.logInfo("onMembershipSync", {
           organizationId,
           userId: input.userId,
@@ -665,7 +662,9 @@ const authorizeConnection = Effect.fn("OrganizationAgent.authorizeConnection")(
     if (!connection) return;
     const identity = yield* getConnectionIdentity();
     const repo = yield* OrganizationRepository;
-    const authorized = yield* repo.isMember(identity.userId as Domain.User["id"]);
+    const authorized = yield* repo.isMember(
+      identity.userId as Domain.User["id"],
+    );
     if (!authorized) {
       yield* Effect.logWarning("authorizeConnection.forbidden", {
         userId: identity.userId,
