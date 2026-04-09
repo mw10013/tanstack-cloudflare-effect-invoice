@@ -73,13 +73,13 @@ const makeRunEffect = (ctx: DurableObjectState, env: Env) => {
     Effect.runPromise(Effect.provide(effect, layer));
 };
 
-export interface OrganizationAgentState {
-  readonly message: string;
+export interface OrganizationAgentConnectionState {
+  readonly userId: Domain.User["id"];
 }
 
-export interface OrganizationAgentConnectionState {
-  readonly userId: string;
-}
+const ConnectionState = Schema.Struct({
+  userId: Domain.User.fields.id,
+});
 
 export const organizationAgentAuthHeaders = {
   userId: "x-organization-agent-user-id",
@@ -117,10 +117,7 @@ export const extractAgentInstanceName = (request: Request) => {
   return segments[2] ?? null;
 };
 
-export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
-  initialState: OrganizationAgentState = {
-    message: "Organization agent ready",
-  };
+export class OrganizationAgent extends Agent<Env> {
 
   declare private runEffect: ReturnType<typeof makeRunEffect>;
 
@@ -228,7 +225,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   createInvoice() {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* authorizeConnection();
+        yield* assertMember();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -255,7 +252,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   updateInvoice(input: typeof UpdateInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* authorizeConnection();
+        yield* assertMember();
         const data =
           yield* Schema.decodeUnknownEffect(UpdateInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -290,7 +287,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
       Effect.gen({ self: this }, function* () {
         const data =
           yield* Schema.decodeUnknownEffect(UploadInvoiceInput)(input);
-        yield* authorizeConnection();
+        yield* assertMember();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -472,7 +469,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   deleteInvoice(input: typeof DeleteInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* authorizeConnection();
+        yield* assertMember();
         const { invoiceId } =
           yield* Schema.decodeUnknownEffect(DeleteInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -641,7 +638,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   getInvoices() {
     return this.runEffect(
       Effect.gen(function* () {
-        yield* authorizeConnection();
+        yield* assertMember();
         const repo = yield* OrganizationRepository;
         return yield* repo.getInvoices();
       }),
@@ -652,7 +649,7 @@ export class OrganizationAgent extends Agent<Env, OrganizationAgentState> {
   getInvoice(input: typeof GetInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen(function* () {
-        yield* authorizeConnection();
+        yield* assertMember();
         const { invoiceId } =
           yield* Schema.decodeUnknownEffect(GetInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -749,39 +746,30 @@ const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
   },
 );
 
-const getConnectionIdentity = Effect.fn(
-  "OrganizationAgent.getConnectionIdentity",
-)(function* () {
-  const { agent, connection } = getCurrentAgent<OrganizationAgent>();
-  const identity = connection?.state as
-    | OrganizationAgentConnectionState
-    | null
-    | undefined;
-  if (!agent || !identity?.userId) {
-    return yield* new OrganizationAgentError({
-      message: "Unauthorized",
-    });
-  }
-  return identity;
-});
-
-const authorizeConnection = Effect.fn("OrganizationAgent.authorizeConnection")(
+/**
+ * Per-RPC membership guard for `@callable()` methods.
+ *
+ * Re-checks the DO-local Member table on every call because membership can
+ * be revoked after the WebSocket connection was established in
+ * {@link OrganizationAgent.onConnect}.
+ */
+const assertMember = Effect.fn("OrganizationAgent.assertMember")(
   function* () {
-    const { connection } = getCurrentAgent<OrganizationAgent>();
-    if (!connection) return;
-    const identity = yield* getConnectionIdentity();
-    const repo = yield* OrganizationRepository;
-    const authorized = yield* repo.isMember(
-      identity.userId as Domain.User["id"],
-    );
-    if (!authorized) {
-      yield* Effect.logWarning("authorizeConnection.forbidden", {
-        userId: identity.userId,
-      });
+    const { agent, connection } = getCurrentAgent<OrganizationAgent>();
+    if (!agent || !connection) {
       return yield* new OrganizationAgentError({
-        message: `Forbidden: userId=${identity.userId} not in Member table`,
+        message: "Unauthorized",
       });
     }
-    return identity;
+    const { userId } = yield* Schema.decodeUnknownEffect(ConnectionState)(
+      connection.state,
+    );
+    const repo = yield* OrganizationRepository;
+    const authorized = yield* repo.isMember(userId);
+    if (!authorized) {
+      return yield* new OrganizationAgentError({
+        message: `Forbidden: userId=${userId} not in Member table`,
+      });
+    }
   },
 );

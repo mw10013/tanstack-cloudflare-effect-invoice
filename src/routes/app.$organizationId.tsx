@@ -1,5 +1,5 @@
 import type { AuthInstance } from "@/lib/Auth";
-import type { OrganizationAgent, OrganizationAgentState } from "@/organization-agent";
+import type { OrganizationAgent } from "@/organization-agent";
 
 import {
   createFileRoute,
@@ -106,7 +106,7 @@ function RouteComponent() {
   const { organization, organizations, sessionUser } = Route.useRouteContext();
   const router = useRouter();
 
-  const agent = useAgent<OrganizationAgent, OrganizationAgentState>({
+  const agent = useAgent<OrganizationAgent, unknown>({
     agent: "organization-agent",
     name: organizationId,
     onMessage: (event) => {

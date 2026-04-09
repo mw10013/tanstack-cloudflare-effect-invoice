@@ -1,11 +1,9 @@
-import type { OrganizationAgent, OrganizationAgentState } from "@/organization-agent";
+import type { OrganizationAgent } from "@/organization-agent";
 
 import * as React from "react";
 import type { useAgent } from "agents/react";
 
-type AgentReturn = ReturnType<
-  typeof useAgent<OrganizationAgent, OrganizationAgentState>
->;
+type AgentReturn = ReturnType<typeof useAgent<OrganizationAgent, unknown>>;
 
 interface OrganizationAgentContextValue {
   readonly call: AgentReturn["call"];
