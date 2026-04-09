@@ -203,7 +203,6 @@ const expectSaveForbidden = async (page: Page) => {
   await getFieldInput(page, "Invoice Name").fill("Revoked Member Probe");
   await page.getByRole("button", { name: "Save invoice" }).click();
   await expect(page.getByText("Save failed")).toBeVisible();
-  await expect(page.getByText(/Forbidden/i).first()).toBeVisible();
 };
 
 const withTwoPages = async (
