@@ -176,48 +176,27 @@ export class OrganizationAgent extends Agent<Env> {
   }
 
   /**
-   * Authenticates and authorizes incoming WebSocket connections.
+   * Sets connection state from the trusted `x-organization-agent-user-id`
+   * header injected by {@link authorizeAgentRequest} in the Worker fetch
+   * handler.
    *
-   * - **4001 Unauthorized** — no userId header; identity unknown (client should
-   *   re-authenticate).
-   * - **4003 Forbidden** — userId present but not in the Member table; identity
-   *   known, lacks access (client should request an invitation).
-   *
-   * The userId comes from a trusted server-set header, so distinguishing
-   * 4001 vs 4003 does not leak membership info to untrusted callers.
+   * Authorization (session validation + D1 membership) is enforced
+   * pre-upgrade by the Worker's `onBeforeConnect` gate, so this handler
+   * only needs to propagate the authenticated userId onto the connection
+   * for use by per-RPC guards ({@link assertMember}) and the membership
+   * revocation close loop ({@link syncMembershipImpl}).
    */
-  async onConnect(
+  onConnect(
     connection: Connection<OrganizationAgentConnectionState>,
     ctx: ConnectionContext,
   ) {
-    await this.runEffect(
+    return this.runEffect(
       Effect.gen(function* () {
         const userId = yield* Schema.decodeUnknownEffect(
           Domain.User.fields.id,
-        )(ctx.request.headers.get(organizationAgentAuthHeaders.userId)).pipe(
-          Effect.mapError(() => "Unauthorized" as const),
-        );
-        const repo = yield* OrganizationRepository;
-        const authorized = yield* repo.isMember(userId);
-        if (!authorized) return yield* Effect.fail("Forbidden" as const);
+        )(ctx.request.headers.get(organizationAgentAuthHeaders.userId));
         connection.setState({ userId });
-      }).pipe(
-        // connection.close() is full cleanup — no manual bookkeeping needed.
-        // PartyServer's InMemoryConnectionManager auto-deletes from its internal
-        // Map<id, Connection> via close/error event listeners, and in hibernation
-        // mode the platform handles tracking entirely. getConnections() also
-        // filters to readyState === OPEN, so closed connections are immediately
-        // invisible. Agent-level state lives in a WeakMap and is GC'd with the
-        // connection object.
-        Effect.catch((error) =>
-          Effect.sync(() => {
-            connection.close(
-              error === "Unauthorized" ? 4001 : 4003,
-              error === "Unauthorized" ? "Unauthorized" : "Forbidden",
-            );
-          }),
-        ),
-      ),
+      }),
     );
   }
 

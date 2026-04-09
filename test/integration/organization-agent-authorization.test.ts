@@ -309,6 +309,17 @@ layer(configLayer, { excludeTestServices: true })(
         );
         expect(closeEvent.code).toBe(4003);
         expect(closeEvent.reason).toBe("Membership revoked");
+
+        const reconnectResponse = yield* workerFetch(
+          `http://w/agents/organization-agent/${owner.organizationId}`,
+          {
+            headers: {
+              Upgrade: "websocket",
+              Cookie: member.sessionCookie,
+            },
+          },
+        );
+        expect(reconnectResponse.status).toBe(403);
       }));
   },
 );

@@ -4,6 +4,7 @@ import { routeAgentRequest } from "agents";
 import { Cause, Effect, Layer, ServiceMap } from "effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import { Auth } from "@/lib/Auth";
 import { D1 } from "@/lib/D1";
@@ -13,6 +14,7 @@ import { queue } from "@/lib/Q";
 import { R2 } from "@/lib/R2";
 import { Repository } from "@/lib/Repository";
 import { Request as AppRequest } from "@/lib/Request";
+import * as Domain from "@/lib/Domain";
 import { Stripe } from "@/lib/Stripe";
 
 import {
@@ -134,6 +136,14 @@ const authorizeAgentRequest = Effect.fn("authorizeAgentRequest")(function* (
   const agentName = extractAgentInstanceName(request);
   const activeOrganizationId = session.value.session.activeOrganizationId;
   if (!activeOrganizationId || agentName !== activeOrganizationId) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  const repository = yield* Repository;
+  const d1Member = yield* repository.getMemberByUserAndOrg({
+    userId: yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(session.value.user.id),
+    organizationId: yield* Schema.decodeUnknownEffect(Domain.Organization.fields.id)(activeOrganizationId),
+  });
+  if (Option.isNone(d1Member)) {
     return new Response("Forbidden", { status: 403 });
   }
   const headers = new Headers(request.headers);
