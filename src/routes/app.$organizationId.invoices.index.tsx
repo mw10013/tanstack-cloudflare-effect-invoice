@@ -60,7 +60,7 @@ const invoiceSearchSchema = Schema.Struct({
   selectedInvoiceId: Schema.optional(Schema.String),
 });
 
-const getLoaderData = createServerFn({ method: "GET" })
+export const getLoaderData = createServerFn({ method: "GET" })
   .inputValidator(
     Schema.toStandardSchemaV1(
       Schema.Struct({

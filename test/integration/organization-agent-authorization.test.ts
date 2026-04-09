@@ -5,6 +5,7 @@ import { layer } from "@effect/vitest";
 import { expect } from "vitest";
 
 import { switchOrganizationServerFn } from "@/routes/app.$organizationId";
+import { getLoaderData as getInvoiceLoaderData } from "@/routes/app.$organizationId.invoices.$invoiceId";
 import { acceptInvitation } from "@/routes/app.$organizationId.index";
 import {
   getLoaderData as getInvitationsLoaderData,
@@ -150,7 +151,7 @@ const removeMemberInApp = Effect.fn("removeMemberInApp")(function* ({
 layer(configLayer, { excludeTestServices: true })(
   "organization-agent-authorization",
   (it) => {
-    it.effect("invited member is authorized for all invoice callables", () =>
+    it.effect("invited member is authorized for invoice callables and reads", () =>
       Effect.gen(function* () {
         const ownerEmail = `int-auth-owner-${crypto.randomUUID()}@test.com`;
         const memberEmail = `int-auth-member-${crypto.randomUUID()}@test.com`;
@@ -185,13 +186,12 @@ layer(configLayer, { excludeTestServices: true })(
           createResult.result,
         );
 
-        const getInvoicesResult = yield* callAgentRpc(ws, "getInvoices", []);
-        assertAgentRpcSuccess(getInvoicesResult);
-
-        const getInvoiceResult = yield* callAgentRpc(ws, "getInvoice", [
-          { invoiceId },
-        ]);
-        assertAgentRpcSuccess(getInvoiceResult);
+        const invoiceLoaderData = yield* callServerFn({
+          serverFn: getInvoiceLoaderData,
+          data: { organizationId: owner.organizationId, invoiceId },
+          headers: { Cookie: member.sessionCookie },
+        });
+        expect(invoiceLoaderData.invoice.id).toBe(invoiceId);
 
         const updateResult = yield* callAgentRpc(ws, "updateInvoice", [
           {

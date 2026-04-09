@@ -52,7 +52,11 @@ layer(configLayer, { excludeTestServices: true })("uploadInvoice", (it) => {
       expect(head?.customMetadata?.fileName).toBe("invoice-1-redacted.png");
       expect(head?.customMetadata?.organizationId).toBe(organizationId);
 
-      const invoice = yield* pollInvoiceStatus(ws, invoiceId);
+      const invoice = yield* pollInvoiceStatus({
+        sessionCookie,
+        organizationId,
+        invoiceId,
+      });
       expect(invoice).toBeDefined();
       expect(invoice.status).toBe("ready");
     }), { timeout: 90_000 });

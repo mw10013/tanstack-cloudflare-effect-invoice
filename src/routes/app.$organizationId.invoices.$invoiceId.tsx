@@ -41,7 +41,7 @@ const InvoiceFormSchema = Schema.Struct({
 const invoiceFormStandardSchema = Schema.toStandardSchemaV1(InvoiceFormSchema);
 const emptyInvoiceItem = () => ({ description: "", quantity: "", unitPrice: "", amount: "", period: "" });
 
-const getLoaderData = createServerFn({ method: "GET" })
+export const getLoaderData = createServerFn({ method: "GET" })
   .inputValidator(Schema.toStandardSchemaV1(Schema.Struct({ organizationId: Organization.fields.id, invoiceId: OrganizationDomain.Invoice.fields.id })))
   .handler(({ context: { runEffect }, data: { organizationId, invoiceId } }) =>
     runEffect(

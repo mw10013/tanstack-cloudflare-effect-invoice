@@ -6,11 +6,10 @@ import { runWithStartContext } from "@tanstack/start-storage-context";
 import { assertFalse, assertTrue } from "@effect/vitest/utils";
 import { env, exports } from "cloudflare:workers";
 import { Effect, Option, Schedule } from "effect";
-import * as Schema from "effect/Schema";
 import * as Cookies from "effect/unstable/http/Cookies";
 
 import { login as loginServerFn } from "@/lib/Login";
-import * as OrganizationDomain from "@/lib/OrganizationDomain";
+import { getLoaderData as getInvoiceLoaderData } from "@/routes/app.$organizationId.invoices.$invoiceId";
 
 export type ServerFn<TInputValidator, TResponse> = RequiredFetcher<
   undefined,
@@ -204,17 +203,27 @@ export const login = Effect.fn("login")(function*(email: string) {
 });
 
 export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(
-  function*(ws: WebSocket, invoiceId: string) {
-    return yield* callAgentRpc(ws, "getInvoices").pipe(
-      Effect.flatMap((result) => {
-        if (!result.success) return Effect.fail(new Error("getInvoices failed"));
-        const invoices = Schema.decodeUnknownSync(
-          Schema.Array(OrganizationDomain.Invoice),
-        )(result.result);
-        const inv = invoices.find((i) => i.id === invoiceId);
-        if (inv?.status === "ready" || inv?.status === "error") return Effect.succeed(inv);
-        return Effect.fail(new Error("not ready"));
-      }),
+  function*(
+    {
+      sessionCookie,
+      organizationId,
+      invoiceId,
+    }: {
+      sessionCookie: string;
+      organizationId: string;
+      invoiceId: string;
+    },
+  ) {
+    return yield* callServerFn({
+      serverFn: getInvoiceLoaderData,
+      data: { organizationId, invoiceId },
+      headers: { Cookie: sessionCookie },
+    }).pipe(
+      Effect.flatMap(({ invoice }) =>
+        invoice.status === "ready" || invoice.status === "error"
+          ? Effect.succeed(invoice)
+          : Effect.fail(new Error("not ready")),
+      ),
       Effect.retry(
         Schedule.spaced("2 seconds").pipe(
           Schedule.while(({ elapsed }) => elapsed < 60_000),

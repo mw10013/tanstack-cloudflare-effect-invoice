@@ -6,11 +6,14 @@ import { env } from "cloudflare:workers";
 import { expect } from "vitest";
 
 import * as OrganizationDomain from "@/lib/OrganizationDomain";
+import { getLoaderData as getInvoiceLoaderData } from "@/routes/app.$organizationId.invoices.$invoiceId";
+import { getLoaderData as getInvoicesLoaderData } from "@/routes/app.$organizationId.invoices.index";
 import {
   agentWebSocket,
   assertAgentRpcFailure,
   assertAgentRpcSuccess,
   callAgentRpc,
+  callServerFn,
   login,
 } from "../TestUtils";
 
@@ -35,9 +38,11 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       assertAgentRpcSuccess(createResult);
       const { invoiceId } = Schema.decodeUnknownSync(InvoiceIdResult)(createResult.result);
 
-      const getResult = yield* callAgentRpc(ws, "getInvoice", [{ invoiceId }]);
-      assertAgentRpcSuccess(getResult);
-      const invoice = Schema.decodeUnknownSync(OrganizationDomain.InvoiceWithItems)(getResult.result);
+      const { invoice } = yield* callServerFn({
+        serverFn: getInvoiceLoaderData,
+        data: { organizationId, invoiceId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoice.id).toBe(invoiceId);
       expect(invoice.name).toBe("Untitled Invoice");
       expect(invoice.status).toBe("ready");
@@ -53,30 +58,33 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       assertAgentRpcSuccess(createResult);
       const { invoiceId } = Schema.decodeUnknownSync(InvoiceIdResult)(createResult.result);
 
-      const listResult = yield* callAgentRpc(ws, "getInvoices", []);
-      assertAgentRpcSuccess(listResult);
-      const invoices = Schema.decodeUnknownSync(Schema.Array(OrganizationDomain.Invoice))(listResult.result);
+      const { invoices } = yield* callServerFn({
+        serverFn: getInvoicesLoaderData,
+        data: { organizationId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoices.some((i) => i.id === invoiceId)).toBe(true);
     }));
 
-  it.effect("getInvoice returns null for non-existent id", () =>
+  it.effect("invoice detail loader returns undefined for non-existent id", () =>
     Effect.gen(function* () {
       const { sessionCookie, organizationId } = yield* login("crud-get-null@test.com");
-      const ws = yield* agentWebSocket(organizationId, sessionCookie);
-
-      const result = yield* callAgentRpc(ws, "getInvoice", [{ invoiceId: "nonexistent-id" }]);
-      assertAgentRpcSuccess(result);
-      expect(result.result).toBeNull();
+      const result = yield* callServerFn({
+        serverFn: getInvoiceLoaderData,
+        data: { organizationId, invoiceId: "nonexistent-id" },
+        headers: { Cookie: sessionCookie },
+      });
+      expect(result).toBeUndefined();
     }));
 
   it.effect("getInvoices returns empty for fresh user", () =>
     Effect.gen(function* () {
       const { sessionCookie, organizationId } = yield* login("crud-empty@test.com");
-      const ws = yield* agentWebSocket(organizationId, sessionCookie);
-
-      const result = yield* callAgentRpc(ws, "getInvoices", []);
-      assertAgentRpcSuccess(result);
-      const invoices = Schema.decodeUnknownSync(Schema.Array(OrganizationDomain.Invoice))(result.result);
+      const { invoices } = yield* callServerFn({
+        serverFn: getInvoicesLoaderData,
+        data: { organizationId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoices).toHaveLength(0);
     }));
 
@@ -93,9 +101,11 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       assertAgentRpcSuccess(r2);
       const second = Schema.decodeUnknownSync(InvoiceIdResult)(r2.result).invoiceId;
 
-      const listResult = yield* callAgentRpc(ws, "getInvoices", []);
-      assertAgentRpcSuccess(listResult);
-      const invoices = Schema.decodeUnknownSync(Schema.Array(OrganizationDomain.Invoice))(listResult.result);
+      const { invoices } = yield* callServerFn({
+        serverFn: getInvoicesLoaderData,
+        data: { organizationId },
+        headers: { Cookie: sessionCookie },
+      });
       const idx1 = invoices.findIndex((i) => i.id === first);
       const idx2 = invoices.findIndex((i) => i.id === second);
       expect(idx2).toBeLessThan(idx1);
@@ -133,9 +143,11 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       const updateResult = yield* callAgentRpc(ws, "updateInvoice", [updateData]);
       assertAgentRpcSuccess(updateResult);
 
-      const getResult = yield* callAgentRpc(ws, "getInvoice", [{ invoiceId }]);
-      assertAgentRpcSuccess(getResult);
-      const invoice = Schema.decodeUnknownSync(OrganizationDomain.InvoiceWithItems)(getResult.result);
+      const { invoice } = yield* callServerFn({
+        serverFn: getInvoiceLoaderData,
+        data: { organizationId, invoiceId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoice.name).toBe("Test Invoice");
       expect(invoice.invoiceNumber).toBe("INV-001");
       expect(invoice.invoiceDate).toBe("2026-01-15");
@@ -188,9 +200,11 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       const updateResult = yield* callAgentRpc(ws, "updateInvoice", [updateData]);
       assertAgentRpcSuccess(updateResult);
 
-      const getResult = yield* callAgentRpc(ws, "getInvoice", [{ invoiceId }]);
-      assertAgentRpcSuccess(getResult);
-      const invoice = Schema.decodeUnknownSync(OrganizationDomain.InvoiceWithItems)(getResult.result);
+      const { invoice } = yield* callServerFn({
+        serverFn: getInvoiceLoaderData,
+        data: { organizationId, invoiceId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoice.invoiceItems).toHaveLength(2);
       expect(invoice.invoiceItems[0].description).toBe("Widget A");
       expect(invoice.invoiceItems[0].quantity).toBe("2");
@@ -212,9 +226,12 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       const deleteResult = yield* callAgentRpc(ws, "deleteInvoice", [{ invoiceId }]);
       assertAgentRpcSuccess(deleteResult);
 
-      const getResult = yield* callAgentRpc(ws, "getInvoice", [{ invoiceId }]);
-      assertAgentRpcSuccess(getResult);
-      expect(getResult.result).toBeNull();
+      const { invoices } = yield* callServerFn({
+        serverFn: getInvoicesLoaderData,
+        data: { organizationId },
+        headers: { Cookie: sessionCookie },
+      });
+      expect(invoices.some((invoice) => invoice.id === invoiceId)).toBe(false);
     }));
 
   it.effect("getInvoices excludes deleted invoice", () =>
@@ -233,9 +250,11 @@ layer(configLayer, { excludeTestServices: true })("invoice-crud", (it) => {
       const deleteResult = yield* callAgentRpc(ws, "deleteInvoice", [{ invoiceId: remove }]);
       assertAgentRpcSuccess(deleteResult);
 
-      const listResult = yield* callAgentRpc(ws, "getInvoices", []);
-      assertAgentRpcSuccess(listResult);
-      const invoices = Schema.decodeUnknownSync(Schema.Array(OrganizationDomain.Invoice))(listResult.result);
+      const { invoices } = yield* callServerFn({
+        serverFn: getInvoicesLoaderData,
+        data: { organizationId },
+        headers: { Cookie: sessionCookie },
+      });
       expect(invoices).toHaveLength(1);
       expect(invoices[0].id).toBe(keep);
     }));
