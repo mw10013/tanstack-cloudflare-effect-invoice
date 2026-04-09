@@ -30,11 +30,11 @@ export function DefaultCatchBoundary({ error }: ErrorComponentProps) {
   });
   const [showDetails, setShowDetails] = useState(false);
 
-  console.error(error);
-
   const errorMessage = error.message || "An unexpected error occurred";
   const errorStack = error.stack ?? "";
   const hasStack = errorStack.length > 0;
+
+  console.error({ errorMessage, errorStack, error });
 
   const handleReportError = () => {
     const subject = encodeURIComponent("Error Report");

@@ -117,8 +117,7 @@ export const extractAgentInstanceName = (request: Request) => {
   return segments[2] ?? null;
 };
 
-export class OrganizationAgent extends Agent<Env> {
-
+export class OrganizationAgent extends Agent {
   declare private runEffect: ReturnType<typeof makeRunEffect>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -192,9 +191,9 @@ export class OrganizationAgent extends Agent<Env> {
   ) {
     return this.runEffect(
       Effect.gen(function* () {
-        const userId = yield* Schema.decodeUnknownEffect(
-          Domain.User.fields.id,
-        )(ctx.request.headers.get(organizationAgentAuthHeaders.userId));
+        const userId = yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(
+          ctx.request.headers.get(organizationAgentAuthHeaders.userId),
+        );
         connection.setState({ userId });
       }),
     );
@@ -522,9 +521,7 @@ export class OrganizationAgent extends Agent<Env> {
     userId: Domain.User["id"];
     change: MembershipSyncChange;
   }) {
-    return this.runEffect(
-      syncMembershipImpl("syncMembership", this, input),
-    );
+    return this.runEffect(syncMembershipImpl("syncMembership", this, input));
   }
 
   /**
@@ -710,11 +707,16 @@ const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
           (conn) =>
             conn.state?.userId === input.userId
               ? Effect.try({
-                  try: () => { conn.close(4003, "Membership revoked"); },
+                  try: () => {
+                    conn.close(4003, "Membership revoked");
+                  },
                   catch: (error) => error,
                 }).pipe(
                   Effect.catch((error) =>
-                    Effect.logWarning("conn.close failed during membership removal", { userId: input.userId, organizationId, error }),
+                    Effect.logWarning(
+                      "conn.close failed during membership removal",
+                      { userId: input.userId, organizationId, error },
+                    ),
                   ),
                 )
               : Effect.void,
@@ -731,25 +733,28 @@ const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
  * Re-checks the DO-local Member table on every call because membership can
  * be revoked after the WebSocket connection was established in
  * {@link OrganizationAgent.onConnect}. Resolves the current userId from
- * connection state when present, otherwise from the trusted request header
- * used by direct stub calls, then verifies membership in the local Member
- * table. Missing or invalid user identity is treated as an invariant failure
- * and surfaces through schema decoding.
+ * connection state for WebSocket invocations, otherwise from the trusted
+ * request header injected by the Worker for routed HTTP requests, then
+ * verifies membership in the local Member table. Invocations with neither
+ * connection nor request are treated as trusted internal execution.
  */
-const assertMember = Effect.fn("OrganizationAgent.assertMember")(
-  function* () {
-    const { connection, request } = getCurrentAgent<OrganizationAgent>();
-    const userId = connection?.state
-      ? (yield* Schema.decodeUnknownEffect(ConnectionState)(connection.state))
-          .userId
-      : yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(
-          request?.headers.get(organizationAgentAuthHeaders.userId),
-        );
-    const repo = yield* OrganizationRepository;
-    if (yield* repo.isMember(userId)) return;
-    yield* Effect.logWarning(`assertMember.forbidden userId=${userId}`);
-    return yield* new OrganizationAgentError({
-      message: `Forbidden: userId=${userId} not in Member table`,
-    });
-  },
-);
+const assertMember = Effect.fn("OrganizationAgent.assertMember")(function* () {
+  const { connection, request } = getCurrentAgent<OrganizationAgent>();
+
+  // Trusted internal execution like direct DO RPC or background work carries
+  // no caller request/connection context.
+  if (!connection && !request) return;
+
+  const userId = connection?.state
+    ? (yield* Schema.decodeUnknownEffect(ConnectionState)(connection.state))
+        .userId
+    : yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(
+        request?.headers.get(organizationAgentAuthHeaders.userId),
+      );
+  const repo = yield* OrganizationRepository;
+  if (yield* repo.isMember(userId)) return;
+  yield* Effect.logWarning(`assertMember.forbidden userId=${userId}`);
+  return yield* new OrganizationAgentError({
+    message: `Forbidden: userId=${userId} not in Member table`,
+  });
+});

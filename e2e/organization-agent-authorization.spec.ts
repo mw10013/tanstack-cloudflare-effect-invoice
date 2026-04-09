@@ -146,35 +146,20 @@ const openInvoicesPage = async ({
   await page.waitForURL(new RegExp(`/app/${organizationId}/invoices(?:\\?.*)?$`));
 };
 
-const openInvoiceEditorIfNeeded = async ({
+const createInvoice = async ({
   page,
   organizationId,
 }: {
   page: Page;
   organizationId: string;
 }) => {
-  if (new RegExp(`/app/${organizationId}/invoices/[^/?]+$`).test(page.url())) return;
-  await page.getByRole("link", { name: "Edit invoice" }).click();
-  await page.waitForURL(/\/app\/[^/]+\/invoices\/[^/?]+$/);
-};
-
-const createInvoiceEventually = async ({
-  page,
-  organizationId,
-}: {
-  page: Page;
-  organizationId: string;
-}) => {
-  let invoiceId = "";
-  await expect(async () => {
-    await openInvoicesPage({ page, organizationId });
-    await page.getByRole("button", { name: "New Invoice" }).click();
-    await page.waitForURL(/\/app\/[^/]+\/invoices\/[^/?]+$/, {
-      timeout: 1000,
-    });
-    invoiceId = page.url().split("/").at(-1) ?? "";
-    expect(invoiceId).not.toBe("");
-  }).toPass({ timeout: 60_000 });
+  await openInvoicesPage({ page, organizationId });
+  await page.screenshot({ path: `test-results/debug-create-invoice-before-click.png` });
+  await page.getByRole("button", { name: "New Invoice" }).click();
+  await page.waitForURL(/\/app\/[^/]+\/invoices\/[^/?]+$/, { timeout: 15_000 });
+  await page.screenshot({ path: `test-results/debug-create-invoice-after-nav.png` });
+  const invoiceId = page.url().split("/").at(-1) ?? "";
+  invariant(invoiceId, "Could not parse invoiceId from URL");
   return invoiceId;
 };
 
@@ -214,26 +199,11 @@ const removeMember = async ({
   await expect(memberRow).toBeHidden();
 };
 
-const expectSaveForbiddenEventually = async ({
-  page,
-  organizationId,
-}: {
-  page: Page;
-  organizationId: string;
-}) => {
-  let attempt = 0;
-  await expect(async () => {
-    attempt += 1;
-    await openInvoiceEditorIfNeeded({ page, organizationId });
-    await getFieldInput(page, "Invoice Name").fill(
-      `Revoked Member Probe ${String(attempt)}`,
-    );
-    await page.getByRole("button", { name: "Save invoice" }).click();
-    await expect(page.getByText("Save failed")).toBeVisible({ timeout: 1000 });
-    await expect(page.getByText(/Forbidden/i).first()).toBeVisible({
-      timeout: 1000,
-    });
-  }).toPass({ timeout: 90_000 });
+const expectSaveForbidden = async (page: Page) => {
+  await getFieldInput(page, "Invoice Name").fill("Revoked Member Probe");
+  await page.getByRole("button", { name: "Save invoice" }).click();
+  await expect(page.getByText("Save failed")).toBeVisible();
+  await expect(page.getByText(/Forbidden/i).first()).toBeVisible();
 };
 
 const withTwoPages = async (
@@ -263,7 +233,7 @@ test.describe("organization-agent authorization", () => {
     browser,
     baseURL,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(60_000);
     invariant(baseURL, "Missing baseURL");
     await withTwoPages(browser, async ({ ownerPage, memberPage }) => {
       await setupInvitedMember({
@@ -275,7 +245,7 @@ test.describe("organization-agent authorization", () => {
 
       await goToInvoices(memberPage);
       const organizationId = getOrganizationIdFromUrl(memberPage.url());
-      const createdInvoiceId = await createInvoiceEventually({
+      const createdInvoiceId = await createInvoice({
         page: memberPage,
         organizationId,
       });
@@ -321,11 +291,11 @@ test.describe("organization-agent authorization", () => {
     });
   });
 
-  test("removed member is eventually forbidden from callables", async ({
+  test("removed member is immediately forbidden from callables", async ({
     browser,
     baseURL,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(60_000);
     invariant(baseURL, "Missing baseURL");
     await withTwoPages(browser, async ({ ownerPage, memberPage }) => {
       await setupInvitedMember({
@@ -337,13 +307,10 @@ test.describe("organization-agent authorization", () => {
 
       await goToInvoices(memberPage);
       const organizationId = getOrganizationIdFromUrl(memberPage.url());
-      await createInvoiceEventually({ page: memberPage, organizationId });
+      await createInvoice({ page: memberPage, organizationId });
 
       await removeMember({ ownerPage, memberEmail: revokedScenario.memberEmail });
-      await expectSaveForbiddenEventually({
-        page: memberPage,
-        organizationId,
-      });
+      await expectSaveForbidden(memberPage);
     });
   });
 });
