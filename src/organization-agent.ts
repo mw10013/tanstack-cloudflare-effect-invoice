@@ -182,7 +182,7 @@ export class OrganizationAgent extends Agent {
    * Authorization (session validation + D1 membership) is enforced
    * pre-upgrade by the Worker's `onBeforeConnect` gate, so this handler
    * only needs to propagate the authenticated userId onto the connection
-   * for use by per-RPC guards ({@link assertMember}) and the membership
+   * for use by per-RPC guards ({@link assertCallerMember}) and the membership
    * revocation close loop ({@link syncMembershipImpl}).
    */
   onConnect(
@@ -203,7 +203,7 @@ export class OrganizationAgent extends Agent {
   createInvoice() {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* assertMember();
+        yield* assertCallerMember();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -230,7 +230,7 @@ export class OrganizationAgent extends Agent {
   updateInvoice(input: typeof UpdateInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* assertMember();
+        yield* assertCallerMember();
         const data =
           yield* Schema.decodeUnknownEffect(UpdateInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -265,7 +265,7 @@ export class OrganizationAgent extends Agent {
       Effect.gen({ self: this }, function* () {
         const data =
           yield* Schema.decodeUnknownEffect(UploadInvoiceInput)(input);
-        yield* assertMember();
+        yield* assertCallerMember();
         const invoiceLimit = yield* Config.number("INVOICE_LIMIT");
         const repo = yield* OrganizationRepository;
         const count = yield* repo.countInvoices();
@@ -447,7 +447,7 @@ export class OrganizationAgent extends Agent {
   deleteInvoice(input: typeof DeleteInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen({ self: this }, function* () {
-        yield* assertMember();
+        yield* assertCallerMember();
         const { invoiceId } =
           yield* Schema.decodeUnknownEffect(DeleteInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -610,22 +610,18 @@ export class OrganizationAgent extends Agent {
     );
   }
 
-  @callable()
   getInvoices() {
     return this.runEffect(
       Effect.gen(function* () {
-        yield* assertMember();
         const repo = yield* OrganizationRepository;
         return yield* repo.getInvoices();
       }),
     );
   }
 
-  @callable()
   getInvoice(input: typeof GetInvoiceInput.Type) {
     return this.runEffect(
       Effect.gen(function* () {
-        yield* assertMember();
         const { invoiceId } =
           yield* Schema.decodeUnknownEffect(GetInvoiceInput)(input);
         const repo = yield* OrganizationRepository;
@@ -738,23 +734,24 @@ const syncMembershipImpl = Effect.fn("OrganizationAgent.syncMembership")(
  * verifies membership in the local Member table. Invocations with neither
  * connection nor request are treated as trusted internal execution.
  */
-const assertMember = Effect.fn("OrganizationAgent.assertMember")(function* () {
-  const { connection, request } = getCurrentAgent<OrganizationAgent>();
+const assertCallerMember = Effect.fn("OrganizationAgent.assertCallerMember")(
+  function* () {
+    const { connection, request } = getCurrentAgent<OrganizationAgent>();
 
-  // Trusted internal execution like direct DO RPC or background work carries
-  // no caller request/connection context.
-  if (!connection && !request) return;
+    // Trusted internal execution like direct DO RPC or background work carries
+    // no caller request/connection context.
+    if (!connection && !request) return;
 
-  const userId = connection?.state
-    ? (yield* Schema.decodeUnknownEffect(ConnectionState)(connection.state))
-        .userId
-    : yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(
-        request?.headers.get(organizationAgentAuthHeaders.userId),
-      );
-  const repo = yield* OrganizationRepository;
-  if (yield* repo.isMember(userId)) return;
-  yield* Effect.logWarning(`assertMember.forbidden userId=${userId}`);
-  return yield* new OrganizationAgentError({
-    message: `Forbidden: userId=${userId} not in Member table`,
-  });
+    const userId = connection?.state
+      ? (yield* Schema.decodeUnknownEffect(ConnectionState)(connection.state))
+          .userId
+      : yield* Schema.decodeUnknownEffect(Domain.User.fields.id)(
+          request?.headers.get(organizationAgentAuthHeaders.userId),
+        );
+    const repo = yield* OrganizationRepository;
+    if (yield* repo.isMember(userId)) return;
+    yield* Effect.logWarning(`assertCallerMember.forbidden userId=${userId}`);
+    return yield* new OrganizationAgentError({
+      message: `Forbidden: userId=${userId} not in Member table`,
+    });
 });

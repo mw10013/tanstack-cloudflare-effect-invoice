@@ -7,8 +7,8 @@ import { Auth } from "@/lib/Auth";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { Request as AppRequest } from "@/lib/Request";
 
-export const getOrganizationAgentStub = Effect.fn(
-  "getOrganizationAgentStub",
+export const getOrganizationAgentStubForSession = Effect.fn(
+  "getOrganizationAgentStubForSession",
 )(function* (organizationId: Organization["id"]) {
     const request = yield* AppRequest;
     const auth = yield* Auth;
@@ -27,7 +27,7 @@ export const getOrganizationAgentStub = Effect.fn(
 export const getInvoicesWithViewUrl = Effect.fn("getInvoicesWithViewUrl")(function* (
   organizationId: Organization["id"],
 ) {
-  const stub = yield* getOrganizationAgentStub(organizationId);
+  const stub = yield* getOrganizationAgentStubForSession(organizationId);
   const invoices = yield* Effect.tryPromise(() => stub.getInvoices());
   const environment = yield* Config.nonEmptyString("ENVIRONMENT");
   if (environment === "local") {
@@ -75,7 +75,7 @@ export const getInvoice = Effect.fn("getInvoice")(function* (
   organizationId: Organization["id"],
   invoiceId: OrganizationDomain.Invoice["id"],
 ) {
-  const stub = yield* getOrganizationAgentStub(organizationId);
+  const stub = yield* getOrganizationAgentStubForSession(organizationId);
   const invoice: OrganizationDomain.InvoiceWithItems | null =
     yield* Effect.tryPromise(() => stub.getInvoice({ invoiceId }));
   return invoice ? structuredClone(invoice) : null;

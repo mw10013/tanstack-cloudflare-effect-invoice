@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
-import { enqueue, getOrganizationAgentStub } from "@/lib/Q";
+import { enqueue, getOrganizationAgentStubTrusted } from "@/lib/Q";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
@@ -119,7 +119,7 @@ export const removeMember = createServerFn({ method: "POST" })
           }),
         );
         if (Option.isSome(member)) {
-          const stub = yield* getOrganizationAgentStub(organizationId);
+          const stub = yield* getOrganizationAgentStubTrusted(organizationId);
           yield* Effect.tryPromise(() =>
             stub.syncMembership({ userId: member.value.userId, change: "removed" }),
           ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
@@ -156,7 +156,7 @@ const leaveOrganization = createServerFn({ method: "POST" })
             body: { organizationId },
           }),
         );
-        const stub = yield* getOrganizationAgentStub(organizationId);
+        const stub = yield* getOrganizationAgentStubTrusted(organizationId);
         yield* Effect.tryPromise(() =>
           stub.syncMembership({ userId, change: "removed" }),
         ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
@@ -192,7 +192,7 @@ const updateMemberRole = createServerFn({ method: "POST" })
             }),
           );
           if (Option.isSome(member)) {
-            const stub = yield* getOrganizationAgentStub(organizationId);
+            const stub = yield* getOrganizationAgentStubTrusted(organizationId);
             yield* Effect.tryPromise(() =>
               stub.syncMembership({ userId: member.value.userId, change: "role_changed" }),
             ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));

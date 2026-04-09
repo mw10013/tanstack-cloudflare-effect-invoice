@@ -53,7 +53,7 @@ export const enqueue = Effect.fn("enqueue")(function* (message: QueueMessage) {
 // does not populate the Agents SDK instance name, so name-dependent features
 // like workflows can throw until we set it explicitly. See
 // https://github.com/cloudflare/workerd/issues/2240.
-export const getOrganizationAgentStub = Effect.fn("getOrganizationAgentStub")(
+export const getOrganizationAgentStubTrusted = Effect.fn("getOrganizationAgentStubTrusted")(
   function* (organizationId: Domain.Organization["id"]) {
     const { ORGANIZATION_AGENT } = yield* CloudflareEnv;
     const id = ORGANIZATION_AGENT.idFromName(organizationId);
@@ -75,7 +75,7 @@ const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
   notification: typeof R2PutObjectNotification.Type,
 ) {
   const [organizationId] = notification.object.key.split("/", 1);
-  const stub = yield* getOrganizationAgentStub(
+  const stub = yield* getOrganizationAgentStubTrusted(
     yield* Schema.decodeUnknownEffect(Domain.Organization.fields.id)(
       organizationId,
     ),
@@ -91,7 +91,7 @@ const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
 const processFinalizeInvoiceDeletion = Effect.fn(
   "processFinalizeInvoiceDeletion",
 )(function* (message: typeof FinalizeInvoiceDeletionQueueMessage.Type) {
-  const stub = yield* getOrganizationAgentStub(message.organizationId);
+  const stub = yield* getOrganizationAgentStubTrusted(message.organizationId);
   yield* Effect.tryPromise(() =>
     stub.onFinalizeInvoiceDeletion({
       invoiceId: message.invoiceId,
@@ -103,7 +103,7 @@ const processFinalizeInvoiceDeletion = Effect.fn(
 const processFinalizeMembershipSync = Effect.fn(
   "processFinalizeMembershipSync",
 )(function* (message: typeof FinalizeMembershipSyncQueueMessage.Type) {
-  const stub = yield* getOrganizationAgentStub(message.organizationId);
+  const stub = yield* getOrganizationAgentStubTrusted(message.organizationId);
   yield* Effect.tryPromise(() =>
     stub.onFinalizeMembershipSync({
       userId: message.userId,

@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/item";
 import { Auth } from "@/lib/Auth";
 import * as Domain from "@/lib/Domain";
-import { enqueue, getOrganizationAgentStub } from "@/lib/Q";
+import { enqueue, getOrganizationAgentStubTrusted } from "@/lib/Q";
 import { Repository } from "@/lib/Repository";
 import { Request } from "@/lib/Request";
 
@@ -95,7 +95,9 @@ export const acceptInvitation = createServerFn({ method: "POST" })
               body: { invitationId },
             }),
           );
-          const stub = yield* getOrganizationAgentStub(invitation.value.organizationId);
+          const stub = yield* getOrganizationAgentStubTrusted(
+            invitation.value.organizationId,
+          );
           yield* Effect.tryPromise(() =>
             stub.syncMembership({ userId, change: "added" }),
           ).pipe(Effect.catch(() => Effect.logWarning("eager sync failed")));
