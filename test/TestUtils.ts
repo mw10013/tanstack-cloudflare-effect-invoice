@@ -4,6 +4,7 @@ import type { ClientFnMeta, RequiredFetcher } from "@tanstack/react-start";
 import { createClientRpc } from "@tanstack/react-start/client-rpc";
 import { runWithStartContext } from "@tanstack/start-storage-context";
 import { assertFalse, assertTrue } from "@effect/vitest/utils";
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { Effect, Option, Schedule } from "effect";
 import * as Cookies from "effect/unstable/http/Cookies";
@@ -230,6 +231,34 @@ export const pollInvoiceStatus = Effect.fn("pollInvoiceStatus")(
         ),
       ),
     );
+  },
+);
+
+/**
+ * Resolves a Durable Object stub for the OrganizationAgent by name. Used by
+ * tests that need to call `runDurableObjectAlarm` or `runInDurableObject`
+ * directly against the agent's storage.
+ */
+export const getOrganizationAgentStub = (organizationId: string) =>
+  env.ORGANIZATION_AGENT.get(env.ORGANIZATION_AGENT.idFromName(organizationId));
+
+/**
+ * Drains all pending Durable Object alarms for a stub. Per
+ * `refs/cloudflare-docs/.../workers/testing/vitest-integration/known-issues.mdx`,
+ * DO alarms persist across test runs and do not respect isolated storage, so
+ * tests that schedule alarms must explicitly drain them before completing to
+ * avoid stray executions firing into the next test's runtime.
+ *
+ * `runDurableObjectAlarm` returns `true` while there is a pending alarm and
+ * runs it once; the loop terminates as soon as it returns `false`.
+ */
+export const drainAgentAlarms = Effect.fn("drainAgentAlarms")(
+  function* (stub: DurableObjectStub) {
+    yield* Effect.promise(async () => {
+      while (await runDurableObjectAlarm(stub)) {
+        // keep draining
+      }
+    });
   },
 );
 

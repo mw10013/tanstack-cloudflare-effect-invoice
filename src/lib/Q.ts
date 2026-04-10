@@ -4,19 +4,11 @@ import * as Schema from "effect/Schema";
 import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import * as Domain from "@/lib/Domain";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
-import * as OrganizationDomain from "@/lib/OrganizationDomain";
 
 const R2PutObjectNotification = Schema.Struct({
   action: Schema.Literals(["PutObject"]),
   object: Schema.Struct({ key: Schema.NonEmptyString }),
   eventTime: Schema.NonEmptyString,
-});
-
-const FinalizeInvoiceDeletionQueueMessage = Schema.Struct({
-  action: Schema.Literals(["FinalizeInvoiceDeletion"]),
-  organizationId: Domain.Organization.fields.id,
-  invoiceId: OrganizationDomain.Invoice.fields.id,
-  r2ObjectKey: OrganizationDomain.Invoice.fields.r2ObjectKey,
 });
 
 export const membershipSyncChangeValues = [
@@ -38,7 +30,6 @@ export const FinalizeMembershipSyncQueueMessage = Schema.Struct({
 
 export const QueueMessage = Schema.Union([
   R2PutObjectNotification,
-  FinalizeInvoiceDeletionQueueMessage,
   FinalizeMembershipSyncQueueMessage,
 ]);
 
@@ -88,18 +79,6 @@ const processInvoiceUpload = Effect.fn("processInvoiceUpload")(function* (
   );
 });
 
-const processFinalizeInvoiceDeletion = Effect.fn(
-  "processFinalizeInvoiceDeletion",
-)(function* (message: typeof FinalizeInvoiceDeletionQueueMessage.Type) {
-  const stub = yield* getOrganizationAgentStubTrusted(message.organizationId);
-  yield* Effect.tryPromise(() =>
-    stub.onFinalizeInvoiceDeletion({
-      invoiceId: message.invoiceId,
-      r2ObjectKey: message.r2ObjectKey,
-    }),
-  );
-});
-
 const processFinalizeMembershipSync = Effect.fn(
   "processFinalizeMembershipSync",
 )(function* (message: typeof FinalizeMembershipSyncQueueMessage.Type) {
@@ -117,9 +96,6 @@ const processMessage = Effect.fn("processMessage")(function* (
 ) {
   const message = yield* Schema.decodeUnknownEffect(QueueMessage)(rawMessage);
   switch (message.action) {
-    case "FinalizeInvoiceDeletion": {
-      return yield* processFinalizeInvoiceDeletion(message);
-    }
     case "PutObject": {
       return yield* processInvoiceUpload(message);
     }

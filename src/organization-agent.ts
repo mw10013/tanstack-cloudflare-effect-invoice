@@ -11,7 +11,6 @@ import { Config, Effect, Layer, Option, Predicate } from "effect";
 import * as Schema from "effect/Schema";
 
 import { ActivityAction } from "@/lib/Activity";
-import { CloudflareEnv } from "@/lib/CloudflareEnv";
 import { D1 } from "@/lib/D1";
 import * as Domain from "@/lib/Domain";
 import { makeEnvLayer, makeLoggerLayer } from "@/lib/LayerEx";
@@ -434,14 +433,23 @@ export class OrganizationAgent extends Agent {
   }
 
   /**
-   * Deletes a terminal invoice with queue-backed completion guarantees.
+   * Deletes a terminal invoice with alarm-backed completion guarantees.
    *
-   * For terminal invoices (`ready` or `error`), this method first enqueues a
-   * `FinalizeInvoiceDeletion` message with `r2ObjectKey`, then deletes the
-   * invoice row immediately so reads stop returning the invoice.
+   * For terminal invoices (`ready` or `error`), this method first schedules
+   * `onFinalizeInvoiceDeletion` via `this.schedule(0, ...)` so the agent's
+   * next alarm tick runs the R2 cleanup, then deletes the invoice row
+   * immediately so reads stop returning it.
    *
-   * Enqueue-first means if execution fails after enqueue but before local delete,
-   * queue processing still calls `onFinalizeInvoiceDeletion` and completes deletion.
+   * Schedule-first means a crash between scheduling and the local row delete
+   * still converges: the durable schedule row in `cf_agents_schedules` survives
+   * eviction/restart, the alarm fires on the next DO wake, and the handler
+   * applies the (idempotent) row delete and R2 cleanup.
+   *
+   * Failure mode: the Agents SDK has no dead-letter queue. If `r2.delete`
+   * fails past the configured retry budget the schedule row is dropped and
+   * the R2 object becomes orphaned with no recovery hook. Acceptable here
+   * because the invoice file is unreachable from any DB row once the local
+   * row is gone.
    */
   @callable()
   deleteInvoice(input: typeof DeleteInvoiceInput.Type) {
@@ -460,15 +468,28 @@ export class OrganizationAgent extends Agent {
           return yield* new OrganizationAgentError({
             message: `Invoice cannot be deleted in status=${invoice.value.status}`,
           });
-        const { Q: queue } = yield* CloudflareEnv;
         yield* Effect.tryPromise({
           try: () =>
-            queue.send({
-              action: "FinalizeInvoiceDeletion",
-              organizationId: this.name,
-              invoiceId,
-              r2ObjectKey: invoice.value.r2ObjectKey,
-            }),
+            // Wider backoff than SDK defaults (100ms / 3000ms ≈ 600ms total)
+            // because real R2 brownouts typically outlast that window.
+            // baseDelayMs: 1000 / maxDelayMs: 30_000 stretches the worst-case
+            // retry span to ~90s across two retries before the schedule row
+            // is dropped.
+            this.schedule(
+              0,
+              "onFinalizeInvoiceDeletion",
+              {
+                invoiceId,
+                r2ObjectKey: invoice.value.r2ObjectKey,
+              },
+              {
+                retry: {
+                  maxAttempts: 3,
+                  baseDelayMs: 1000,
+                  maxDelayMs: 30_000,
+                },
+              },
+            ),
           catch: (cause) =>
             new OrganizationAgentError({
               message: cause instanceof Error ? cause.message : String(cause),
@@ -480,12 +501,15 @@ export class OrganizationAgent extends Agent {
   }
 
   /**
-   * Finalizes deletion from the `FinalizeInvoiceDeletion` queue message.
+   * Finalizes deletion from the `deleteInvoice` agent alarm.
    *
-   * `deleteInvoice()` already enqueues this work and deletes the DB row immediately.
-   * Queue delivery is at-least-once, so this handler re-applies the DB delete
-   * idempotently to ensure the invoice row is actually removed, then deletes the
-   * R2 object for eventual consistency of storage cleanup.
+   * Dispatched by the Agents SDK scheduler when the `this.schedule(0, ...)` row
+   * written by `deleteInvoice()` becomes due. Native DO alarms are at-least-once
+   * (`refs/cloudflare-docs/.../api/alarms.mdx`), so this handler re-applies the
+   * DB delete idempotently and then deletes the R2 object — both operations are
+   * safe to repeat. Failures are retried by the SDK's `tryN` retry budget
+   * configured at the schedule call site; on retry exhaustion the schedule row
+   * is removed (no DLQ) and the R2 object may be orphaned.
    */
   onFinalizeInvoiceDeletion(input: {
     invoiceId: Invoice["id"];
